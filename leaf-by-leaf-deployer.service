@@ -1,0 +1,15 @@
+[Unit]
+Description=Leaf by Leaf — deploy webhook listener
+After=network.target
+
+[Service]
+User=will
+WorkingDirectory=/home/will/apps/leaf-by-leaf
+ExecStart=/home/will/apps/leaf-by-leaf/venv/bin/gunicorn -w 1 -b 127.0.0.1:9001 --timeout 60 deploy_webhook:app
+Restart=on-failure
+RestartSec=5
+
+EnvironmentFile=/home/will/.env/leaf-by-leaf
+
+[Install]
+WantedBy=multi-user.target

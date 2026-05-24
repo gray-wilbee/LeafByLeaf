@@ -1,35 +1,72 @@
-/* VoiceJournal — Editorial direction
- * Look & feel: warm off-white paper, Source Serif 4 headings,
- * Inter body, JetBrains Mono for dates/metadata. Content stays B&W;
- * color arrives only as per-topic highlighter streaks.
+/* Leaf by Leaf — Editorial direction
+ * Design system: warm paper palette, Playfair Display headings,
+ * Lora body, JetBrains Mono for dates/metadata. Forest green primary,
+ * burnt orange accent. Color arrives via design system tokens.
  */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  /* Paper & ink — warm neutrals in oklch */
-  --bg:       oklch(97.2% 0.012 80);
-  --paper:    oklch(98.8% 0.008 80);
-  --ink:      oklch(22% 0.015 60);
-  --ink-2:    oklch(42% 0.02 60);
-  --ink-3:    oklch(58% 0.018 60);
-  --rule:     oklch(88% 0.014 80);
-  --rule-2:   oklch(92% 0.01 80);
+  /* ── Leaf by Leaf Design System Tokens ───────────────────────── */
 
-  /* Signature accent (used sparingly — "today" marker, focused input) */
-  --accent:   oklch(58% 0.15 40);
-  --accent-bg:oklch(95% 0.04 40);
-  --accent-fg:oklch(35% 0.09 40);
+  /* Core palette */
+  --color-forest:       #3F5B46;
+  --color-burnt-orange: #C25D2A;
+  --color-paper:        #F2E9DD;
+  --color-sage:         #A7B494;
+  --color-ink:          #2B2B2B;
 
-  /* Highlight tiers — defined on .hl so --hue from inline style is in scope */
+  /* Tonal extensions */
+  --color-forest-deep:  #2E4434;
+  --color-forest-soft:  #6B856F;
+  --color-orange-deep:  #A14B1F;
+  --color-orange-soft:  #E3845A;
+  --color-paper-warm:   #EADFCE;
+  --color-paper-deep:   #DCCFBA;
+  --color-cream:        #FBF6EE;
+  --color-sage-soft:    #C8D2BB;
+  --color-sage-mist:    #E3E8DA;
 
-  /* Type stacks */
-  --serif: "Source Serif 4", "Source Serif Pro", Georgia, serif;
-  --sans:  "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Semantic surface / text */
+  --bg-raised:  var(--color-cream);
+  --bg-sunken:  var(--color-paper-warm);
+  --bg-inverse: var(--color-forest);
+  --fg-brand:   var(--color-forest);
+  --fg-accent:  var(--color-burnt-orange);
+  --fg-on-dark: var(--color-paper);
+  --border-strong: #B8AC97;
+  --border-brand:  var(--color-forest);
+
+  /* Status */
+  --color-success: #6B8E5A;
+  --color-warning: #D69A3E;
+  --color-error:   #B0432A;
+  --color-info:    #5E7F8B;
+
+  /* ── App-level shorthands (remapped to design system) ─────────── */
+  --bg:       var(--color-paper);
+  --paper:    var(--color-cream);
+  --ink:      var(--color-ink);
+  --ink-2:    #5C5851;
+  --ink-3:    #8A8378;
+  --rule:     #D9CFBE;
+  --rule-2:   #E5DDD0;
+
+  /* Accent → forest green (primary brand) */
+  --accent:    var(--color-forest);
+  --accent-bg: var(--color-sage-mist);
+  --accent-fg: var(--color-forest-deep);
+
+  /* Border alias */
+  --border: #D9CFBE;
+
+  /* Type stacks — updated to design system fonts */
+  --serif: "Playfair Display", "Iowan Old Style", Georgia, serif;
+  --sans:  "Lora", Georgia, "Times New Roman", serif;
   --mono:  "JetBrains Mono", "SF Mono", ui-monospace, monospace;
 
-  --radius: 3px;
-  --radius-lg: 4px;
+  --radius:    4px;
+  --radius-lg: 8px;
 }
 
 body {
@@ -59,10 +96,10 @@ body {
 .nav-brand {
   font-family: var(--serif);
   font-size: 18px;
-  font-weight: 600;
+  font-weight: 700;
   font-style: italic;
   letter-spacing: -0.2px;
-  color: var(--ink);
+  color: var(--fg-brand);
 }
 
 .nav-links {

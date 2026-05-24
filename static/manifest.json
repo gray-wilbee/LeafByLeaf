@@ -1,12 +1,12 @@
 {
-  "name": "Journal",
-  "short_name": "Journal",
-  "description": "Personal voice journal",
+  "name": "Leaf by Leaf",
+  "short_name": "Leaf by Leaf",
+  "description": "Personal voice journaling app",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#F7F3EE",
-  "theme_color": "#B85C2A",
+  "background_color": "#F2E9DD",
+  "theme_color": "#3F5B46",
   "icons": [
     {
       "src": "/static/icons/icon-192.png",

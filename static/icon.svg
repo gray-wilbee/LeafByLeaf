@@ -1,12 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#F7F3EE"/>
-  <text
-    x="256" y="358"
-    font-family="Georgia, 'Times New Roman', serif"
-    font-size="340"
-    font-weight="400"
-    font-style="italic"
-    text-anchor="middle"
-    fill="#B85C2A"
-  >J</text>
+  <rect width="512" height="512" rx="96" fill="#F2E9DD"/>
+  <!-- Leaf shape representing "Leaf by Leaf" -->
+  <path d="M256 80 C256 80 380 140 380 260 C380 340 320 400 256 420 C192 400 132 340 132 260 C132 140 256 80 256 80Z"
+    fill="#3F5B46" opacity="0.9"/>
+  <!-- Stem -->
+  <line x1="256" y1="420" x2="256" y2="460" stroke="#3F5B46" stroke-width="12" stroke-linecap="round"/>
+  <!-- Vein -->
+  <line x1="256" y1="140" x2="256" y2="400" stroke="#F2E9DD" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
 </svg>
