@@ -3,4 +3,12 @@ __pycache__/
 *.db
 venv/
 .env
+# Design system — large local reference files, not tracked in git
 visual assets/*.zip
+visual assets/assets/
+visual assets/preview/
+visual assets/ui_kits/
+visual assets/uploads/
+visual assets/colors_and_type.css
+visual assets/README.md
+visual assets/SKILL.md
