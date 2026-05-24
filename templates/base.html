@@ -7,7 +7,7 @@
   <title>{% block title %}Leaf by Leaf{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&family=JetBrains+Mono:wght@400;500;600&family=Sacramento&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="{{ url_for('static', filename='search.js') }}" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"
@@ -25,7 +25,9 @@
 </head>
 <body>
   <nav class="nav">
-    <span class="nav-brand">Leaf by Leaf</span>
+    <a href="{{ url_for('index') }}" class="nav-brand">
+      <img src="{{ url_for('static', filename='logo-wordmark-horizontal.png') }}" alt="Leaf by Leaf" class="nav-logo" height="28">
+    </a>
     <div class="nav-links" id="navLinks">
       <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint in ('index', 'entry_view') %}active{% endif %}" data-nav-priority="1">Entries</a>
       <a href="{{ url_for('chat_page') }}" class="nav-link {% if request.endpoint in ('chat_page', 'chat_page_active') %}active{% endif %}" data-nav-priority="2">Chat</a>
