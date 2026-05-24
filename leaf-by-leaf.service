@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User=will
 WorkingDirectory=/home/will/apps/leaf-by-leaf
-ExecStart=/home/will/apps/leaf-by-leaf/venv/bin/gunicorn -w 1 -b 0.0.0.0:8004 --timeout 120 app:app
+ExecStart=/home/will/apps/leaf-by-leaf/venv/bin/gunicorn -w 1 -b 0.0.0.0:8005 --timeout 120 app:app
 Restart=on-failure
 RestartSec=5
 
