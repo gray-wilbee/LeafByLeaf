@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Topics — Journal{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+  <div>
+    <h1>Topics</h1>
+    <span class="page-header-sub" id="topic-count">{{ topics|length }} topic{{ 's' if topics|length != 1 else '' }}</span>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center;">
+    <div class="toggle-group" id="view-toggle">
+      <button class="toggle-btn active" data-view="top-level" onclick="setView('top-level')">Top-level only</button>
+      <button class="toggle-btn" data-view="all" onclick="setView('all')">View all</button>
+    </div>
+    <div class="toggle-group" id="display-toggle">
+      <button class="toggle-btn active" data-mode="grid" onclick="setDisplayMode('grid')">Grid</button>
+      <button class="toggle-btn" data-mode="list" onclick="setDisplayMode('list')">List</button>
+    </div>
+    <button class="btn-secondary" onclick="openNewTopic()">New topic</button>
+  </div>
+</div>
+
+{% if topics %}
+<div class="tag-search-bar">
+  <input type="search" id="tag-search" class="tag-search-input"
+         placeholder="Search topics…" autocomplete="off"
+         oninput="applyAll()">
+  <select id="tag-sort" class="tag-sort-select" onchange="applyAll()">
+    <option value="name">Name A–Z</option>
+    <option value="count">Entry count</option>
+    <option value="activity">Last activity</option>
+  </select>
+</div>
+<div class="topics-grid" id="topics-grid">
+  {% for topic in topics %}
+  <a href="{{ url_for('topic_detail', topic_id=topic.id) }}" class="topic-card" style="--topic-color: {{ topic.color }};"
+     data-parent="{{ topic.parent_tag_id or '' }}"
+     data-name="{{ topic.name | lower }}"
+     data-count="{{ topic.entry_count }}"
+     data-activity="{{ topic.last_activity or '' }}">
+    <div class="topic-card-accent"></div>
+    <div class="topic-card-body">
+      <h3 class="topic-card-name">{{ topic.name }}</h3>
+      {% if topic.parent_name %}<span class="topic-card-parent">↳ {{ topic.parent_name }}</span>{% endif %}
+      <p class="topic-card-desc">{{ topic.description or '' }}</p>
+      <span class="topic-card-count">{{ topic.entry_count }} {{ 'entry' if topic.entry_count == 1 else 'entries' }}</span>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+<div id="empty-filtered" class="empty-state hidden">
+  <p>No top-level topics.</p>
+  <p class="empty-hint">All topics have parent topics. Switch to "View all" to see them.</p>
+</div>
+{% else %}
+<div class="empty-state">
+  <p>No topics yet.</p>
+  <p class="empty-hint">Topics are extracted automatically when journal entries are processed.</p>
+</div>
+{% endif %}
+
+<!-- New topic modal -->
+<div id="new-topic-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>New topic</h3>
+    <label class="modal-label" for="new-topic-name">Name</label>
+    <input type="text" id="new-topic-name" class="modal-input" placeholder="Topic name…">
+    <label class="modal-label" for="new-topic-desc">Description <span class="text-muted">(optional)</span></label>
+    <textarea id="new-topic-desc" class="modal-textarea" rows="3" placeholder="One-sentence description…"></textarea>
+    <div class="modal-actions" style="margin-top: 16px;">
+      <button class="btn-secondary" onclick="closeNewTopic()">Cancel</button>
+      <button class="btn-save" id="new-topic-submit" onclick="submitNewTopic()">Create topic</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentView = 'top-level';
+
+function setView(view) {
+  currentView = view;
+  document.querySelectorAll('#view-toggle .toggle-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === view);
+  });
+  applyAll();
+}
+
+function applyAll() {
+  const query = (document.getElementById('tag-search')?.value || '').toLowerCase().trim();
+  const sortBy = document.getElementById('tag-sort')?.value || 'name';
+  const grid = document.getElementById('topics-grid');
+  const emptyMsg = document.getElementById('empty-filtered');
+  if (!grid) return;
+
+  const cards = Array.from(grid.querySelectorAll('.topic-card'));
+
+  const sorted = [...cards].sort((a, b) => {
+    if (sortBy === 'count') return parseInt(b.dataset.count || 0) - parseInt(a.dataset.count || 0);
+    if (sortBy === 'activity') return (b.dataset.activity || '').localeCompare(a.dataset.activity || '');
+    return (a.dataset.name || '').localeCompare(b.dataset.name || '');
+  });
+  sorted.forEach((card, i) => { card.style.order = i; });
+
+  let visible = 0;
+  cards.forEach(card => {
+    const nameMatch = !query || (card.dataset.name || '').includes(query);
+    const hasParent = card.dataset.parent !== '';
+    const viewMatch = currentView === 'all' || !hasParent;
+    const show = nameMatch && viewMatch;
+    card.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+
+  const countEl = document.getElementById('topic-count');
+  if (countEl) countEl.textContent = visible + ' topic' + (visible !== 1 ? 's' : '');
+  if (emptyMsg) emptyMsg.classList.toggle('hidden', visible > 0);
+  grid.style.display = visible === 0 ? 'none' : '';
+}
+
+applyAll();
+
+function setDisplayMode(mode) {
+  const grid = document.getElementById('topics-grid');
+  if (!grid) return;
+  grid.classList.toggle('topics-grid--list', mode === 'list');
+  document.querySelectorAll('#display-toggle .toggle-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  localStorage.setItem('topics-display-mode', mode);
+}
+
+const savedDisplayMode = localStorage.getItem('topics-display-mode') || 'grid';
+if (savedDisplayMode !== 'grid') setDisplayMode(savedDisplayMode);
+
+function openNewTopic() {
+  document.getElementById('new-topic-modal').classList.remove('hidden');
+  document.getElementById('new-topic-name').focus();
+}
+function closeNewTopic() {
+  document.getElementById('new-topic-modal').classList.add('hidden');
+}
+async function submitNewTopic() {
+  const name = document.getElementById('new-topic-name').value.trim();
+  if (!name) return;
+  const description = document.getElementById('new-topic-desc').value.trim();
+  const btn = document.getElementById('new-topic-submit');
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+  try {
+    const r = await fetch('/api/topics/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      window.location.href = `/topics/${data.topic_id}`;
+    } else {
+      alert(data.error || 'Failed to create topic');
+      btn.disabled = false;
+      btn.textContent = 'Create topic';
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Create topic';
+  }
+}
+document.getElementById('new-topic-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeNewTopic();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeNewTopic();
+});
+</script>
+{% endblock %}

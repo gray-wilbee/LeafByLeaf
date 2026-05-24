@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Upload Logs</h1>
+</div>
+
+{% if entries %}
+<div class="log-table-wrap">
+  <table class="log-table">
+    <thead>
+      <tr>
+        <th>Received</th>
+        <th>Status</th>
+        <th>Journal date</th>
+        <th>Time</th>
+        <th>Words</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr class="log-row log-row--{{ e.status }}">
+        <td class="log-cell log-received">{{ e.received_at[:19].replace('T', ' ') }} UTC</td>
+        <td class="log-cell">
+          <span class="log-status log-status--{{ e.status }}">{{ e.status }}</span>
+        </td>
+        <td class="log-cell">
+          {% if e.entry_id %}
+            <a href="{{ url_for('entry_view', entry_id=e.entry_id) }}">{{ e.date }}</a>
+          {% elif e.date %}
+            {{ e.date }}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+        <td class="log-cell">{{ e.time or '—' }}</td>
+        <td class="log-cell">{{ e.words or '—' }}</td>
+        <td class="log-cell log-error">{{ e.error or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state">
+  <p>No upload logs yet.</p>
+  <p class="empty-hint">Logs appear here after voice memos are sent from your iPhone.</p>
+</div>
+{% endif %}
+{% endblock %}

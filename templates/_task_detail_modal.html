@@ -1,0 +1,67 @@
+<div id="task-detail-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide task-detail-card">
+    <div class="task-detail-header">
+      <input id="detail-emoji" type="text" class="task-detail-emoji-input" placeholder="✏️" maxlength="4">
+      <input id="detail-title" type="text" class="task-detail-title-input" placeholder="Task title">
+      <button class="modal-close-btn" onclick="Tasks.closeDetail()">×</button>
+    </div>
+    <div class="task-detail-fields">
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Due date</label>
+        <input type="date" id="detail-due" class="task-detail-input">
+      </div>
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Priority</label>
+        <select id="detail-priority" class="task-detail-select">
+          <option value="high">High</option>
+          <option value="medium" selected>Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Status</label>
+        <select id="detail-status" class="task-detail-select">
+          <option value="open">Open</option>
+          <option value="waiting">Waiting</option>
+          <option value="done">Done</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div id="detail-waiting-row" class="task-detail-field-row hidden">
+        <label class="task-detail-label">Waiting reason</label>
+        <input type="text" id="detail-waiting-reason" class="task-detail-input" placeholder="Waiting for...">
+      </div>
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Repeats</label>
+        <input type="text" id="detail-recurrence" class="task-detail-input" placeholder="every Monday, every 2 weeks...">
+      </div>
+    </div>
+    <div class="task-detail-section">
+      <label class="task-detail-section-label">Notes</label>
+      <textarea id="detail-description" class="task-detail-textarea" rows="3" placeholder="Context or details..."></textarea>
+    </div>
+    <div class="task-detail-section">
+      <label class="task-detail-section-label">Tags</label>
+      <div id="detail-tags" class="task-detail-chips"></div>
+      <div class="task-detail-search-row">
+        <input type="text" id="detail-tag-search" class="task-detail-search-input" placeholder="Search tags..." autocomplete="off" oninput="Tasks.searchTags(this.value)">
+        <div id="detail-tag-results" class="task-detail-results hidden"></div>
+      </div>
+    </div>
+    <div class="task-detail-section">
+      <label class="task-detail-section-label">Depends on</label>
+      <div id="detail-depends" class="task-detail-chips"></div>
+      <div class="task-detail-search-row">
+        <input type="text" id="detail-dep-search" class="task-detail-search-input" placeholder="Search tasks..." autocomplete="off" oninput="Tasks.searchDeps(this.value)">
+        <div id="detail-dep-results" class="task-detail-results hidden"></div>
+      </div>
+    </div>
+    <div class="modal-actions task-detail-actions">
+      <button class="btn-danger" onclick="Tasks.deleteCurrentTask()">Delete</button>
+      <div class="task-detail-actions-right">
+        <button class="btn-secondary" onclick="Tasks.closeDetail()">Cancel</button>
+        <button class="btn-save" onclick="Tasks.saveDetail()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>

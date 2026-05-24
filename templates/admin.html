@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Admin</h1>
+</div>
+
+<div class="log-table-wrap">
+  <table class="log-table">
+    <thead>
+      <tr>
+        <th>User</th>
+        <th>Approved</th>
+        <th>Timezone</th>
+        <th>API key</th>
+        <th>Created</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td><a href="{{ url_for('admin_user_detail', user_id=u.id) }}">{{ u.username }}</a>{% if u.is_admin %} <span class="text-muted">admin</span>{% endif %}</td>
+        <td>{% if u.approved_at %}Yes{% else %}Pending{% endif %}</td>
+        <td>{{ u.timezone }}</td>
+        <td>{{ 'Configured' if u.has_api_key else 'Missing' }}</td>
+        <td>{{ u.created_at[:10] }}</td>
+        <td>
+          {% if not u.approved_at %}<button class="btn-secondary" onclick="Admin.approve({{ u.id }}, this)">Approve</button>{% endif %}
+          <button class="btn-secondary" onclick="Admin.reset({{ u.id }})">Reset link</button>
+          <a class="btn-secondary" href="{{ url_for('admin_user_logs', user_id=u.id) }}">Logs</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div id="reset-output" class="admin-reset-output hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const Admin = {
+  async approve(userId, btn) {
+    btn.disabled = true;
+    const r = await fetch(`/api/admin/users/${userId}/approve`, { method: 'POST' });
+    if (r.ok) location.reload();
+    else btn.disabled = false;
+  },
+  async reset(userId) {
+    const r = await fetch(`/api/admin/users/${userId}/generate-reset`, { method: 'POST' });
+    const data = await r.json();
+    const out = document.getElementById('reset-output');
+    out.classList.remove('hidden');
+    out.textContent = data.reset_url || data.error || 'Failed to generate reset link';
+  }
+};
+</script>
+{% endblock %}

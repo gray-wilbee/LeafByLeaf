@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Entities — Journal{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+  <div>
+    <h1>Entities</h1>
+    <span class="page-header-sub">{{ entities|length }} {{ 'entity' if entities|length == 1 else 'entities' }}</span>
+  </div>
+  <div style="display: flex; gap: 8px; align-items: center;">
+    <div class="toggle-group" id="display-toggle">
+      <button class="toggle-btn active" data-mode="grid" onclick="setDisplayMode('grid')">Grid</button>
+      <button class="toggle-btn" data-mode="list" onclick="setDisplayMode('list')">List</button>
+    </div>
+    <button class="btn-secondary" onclick="openNewEntity()">New entity</button>
+  </div>
+</div>
+
+{% if entities %}
+<div class="tag-search-bar">
+  <input type="search" id="tag-search" class="tag-search-input"
+         placeholder="Search entities…" autocomplete="off"
+         oninput="applyAll()">
+  <select id="tag-sort" class="tag-sort-select" onchange="applyAll()">
+    <option value="name">Name A–Z</option>
+    <option value="count">Entry count</option>
+    <option value="activity">Last activity</option>
+  </select>
+</div>
+<div class="topics-grid" id="entities-grid">
+  {% for entity in entities %}
+  <a href="{{ url_for('entity_detail', entity_id=entity.id) }}" class="topic-card" style="--topic-color: {{ entity.color }};"
+     data-name="{{ entity.name | lower }}"
+     data-count="{{ entity.entry_count }}"
+     data-activity="{{ entity.last_activity or '' }}">
+    <div class="topic-card-accent"></div>
+    <div class="topic-card-body">
+      <h3 class="topic-card-name">{{ entity.name }}</h3>
+      <p class="topic-card-desc">{{ entity.description or '' }}</p>
+      <span class="topic-card-count">{{ entity.entry_count }} {{ 'entry' if entity.entry_count == 1 else 'entries' }}</span>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <p>No entities yet.</p>
+  <p class="empty-hint">Entities (people, organizations, places, tools) are extracted automatically when journal entries are processed.</p>
+</div>
+{% endif %}
+
+<!-- New entity modal -->
+<div id="new-entity-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>New entity</h3>
+    <label class="modal-label" for="new-entity-name">Name</label>
+    <input type="text" id="new-entity-name" class="modal-input" placeholder="Person, org, place, or tool…">
+    <label class="modal-label" for="new-entity-desc">Description <span class="text-muted">(optional)</span></label>
+    <textarea id="new-entity-desc" class="modal-textarea" rows="3" placeholder="One-sentence description…"></textarea>
+    <div class="modal-actions" style="margin-top: 16px;">
+      <button class="btn-secondary" onclick="closeNewEntity()">Cancel</button>
+      <button class="btn-save" id="new-entity-submit" onclick="submitNewEntity()">Create entity</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function applyAll() {
+  const query = (document.getElementById('tag-search')?.value || '').toLowerCase().trim();
+  const sortBy = document.getElementById('tag-sort')?.value || 'name';
+  const grid = document.getElementById('entities-grid');
+  if (!grid) return;
+
+  const cards = Array.from(grid.querySelectorAll('.topic-card'));
+
+  const sorted = [...cards].sort((a, b) => {
+    if (sortBy === 'count') return parseInt(b.dataset.count || 0) - parseInt(a.dataset.count || 0);
+    if (sortBy === 'activity') return (b.dataset.activity || '').localeCompare(a.dataset.activity || '');
+    return (a.dataset.name || '').localeCompare(b.dataset.name || '');
+  });
+  sorted.forEach((card, i) => { card.style.order = i; });
+
+  let visible = 0;
+  cards.forEach(card => {
+    const show = !query || (card.dataset.name || '').includes(query);
+    card.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+
+  const countEl = document.querySelector('.page-header-sub');
+  if (countEl) countEl.textContent = visible + (visible !== 1 ? ' entities' : ' entity');
+}
+
+applyAll();
+
+function setDisplayMode(mode) {
+  const grid = document.getElementById('entities-grid');
+  if (!grid) return;
+  grid.classList.toggle('topics-grid--list', mode === 'list');
+  document.querySelectorAll('#display-toggle .toggle-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  localStorage.setItem('entities-display-mode', mode);
+}
+
+const savedDisplayMode = localStorage.getItem('entities-display-mode') || 'grid';
+if (savedDisplayMode !== 'grid') setDisplayMode(savedDisplayMode);
+
+function openNewEntity() {
+  document.getElementById('new-entity-modal').classList.remove('hidden');
+  document.getElementById('new-entity-name').focus();
+}
+function closeNewEntity() {
+  document.getElementById('new-entity-modal').classList.add('hidden');
+}
+async function submitNewEntity() {
+  const name = document.getElementById('new-entity-name').value.trim();
+  if (!name) return;
+  const description = document.getElementById('new-entity-desc').value.trim();
+  const btn = document.getElementById('new-entity-submit');
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+  try {
+    const r = await fetch('/api/entities/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      window.location.href = `/entities/${data.entity_id}`;
+    } else {
+      alert(data.error || 'Failed to create entity');
+      btn.disabled = false;
+      btn.textContent = 'Create entity';
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Create entity';
+  }
+}
+document.getElementById('new-entity-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeNewEntity();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeNewEntity();
+});
+</script>
+{% endblock %}

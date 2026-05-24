@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Journal — Authorize</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..700;1,8..60,300..700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: oklch(97.2% 0.012 80);
+      --paper: oklch(98.8% 0.008 80);
+      --ink: oklch(22% 0.015 60);
+      --ink-2: oklch(42% 0.02 60);
+      --ink-3: oklch(58% 0.018 60);
+      --rule: oklch(88% 0.014 80);
+      --accent: oklch(58% 0.15 40);
+      --danger: oklch(50% 0.18 25);
+      --serif: "Source Serif 4", Georgia, serif;
+      --sans: "Inter", -apple-system, sans-serif;
+      --mono: "JetBrains Mono", monospace;
+    }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      width: 360px;
+      padding: 48px 40px;
+    }
+    h1 {
+      font-family: var(--serif);
+      font-size: 28px;
+      font-weight: 500;
+      font-style: italic;
+      letter-spacing: -0.4px;
+      margin-bottom: 6px;
+      color: var(--ink);
+    }
+    .subtitle {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 32px;
+    }
+    .request-box {
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 4px;
+      padding: 16px 18px;
+      margin-bottom: 24px;
+    }
+    .request-box p {
+      font-size: 14px;
+      color: var(--ink-2);
+      line-height: 1.5;
+    }
+    .request-box strong {
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .scope-list {
+      margin-top: 12px;
+      padding-left: 0;
+      list-style: none;
+    }
+    .scope-list li {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .scope-list li:last-child { border-bottom: none; }
+    .scope-list li::before { content: "✓  "; color: var(--accent); }
+    .user-pill {
+      display: inline-block;
+      background: var(--bg);
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-3);
+      padding: 2px 8px;
+      margin-bottom: 20px;
+      letter-spacing: 0.3px;
+    }
+    label {
+      display: block;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 3px;
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 14px;
+      padding: 9px 12px;
+      margin-bottom: 18px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus { border-color: var(--accent); }
+    .btn-row {
+      display: flex;
+      gap: 10px;
+    }
+    button {
+      flex: 1;
+      border: none;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      padding: 11px;
+      transition: background 0.15s;
+    }
+    button.approve {
+      background: var(--ink);
+      color: var(--paper);
+    }
+    button.approve:hover { background: var(--ink-2); }
+    button.deny {
+      background: transparent;
+      border: 1px solid var(--rule);
+      color: var(--ink-3);
+    }
+    button.deny:hover { border-color: var(--ink-3); color: var(--ink); }
+    button.login {
+      width: 100%;
+      background: var(--ink);
+      color: var(--paper);
+    }
+    button.login:hover { background: var(--ink-2); }
+    .error {
+      font-family: var(--sans);
+      font-size: 13px;
+      color: var(--danger);
+      margin-bottom: 16px;
+      padding: 8px 0;
+      border-bottom: 1px solid oklch(88% 0.06 25);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Voice Journal</h1>
+    <p class="subtitle">authorization request</p>
+
+    {% if logged_in %}
+      {# Approval screen #}
+      <div class="user-pill">signed in as {{ username }}</div>
+
+      <div class="request-box">
+        <p><strong>{{ client_name }}</strong> is requesting access to your journal.</p>
+        <ul class="scope-list">
+          <li>Read journal entries</li>
+          <li>Read and manage tasks</li>
+          <li>Read and manage topics &amp; entities</li>
+          <li>Read and manage settings</li>
+        </ul>
+      </div>
+
+      <form method="POST">
+        <input type="hidden" name="client_id" value="{{ client_id }}">
+        <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
+        <input type="hidden" name="state" value="{{ state }}">
+        <input type="hidden" name="code_challenge" value="{{ code_challenge }}">
+        <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}">
+        <input type="hidden" name="scope" value="{{ scope }}">
+        <input type="hidden" name="resource" value="{{ resource }}">
+        <div class="btn-row">
+          <button type="submit" name="action" value="approve" class="approve">Authorize</button>
+          <button type="submit" name="action" value="deny" class="deny">Deny</button>
+        </div>
+      </form>
+
+    {% else %}
+      {# Login screen #}
+      {% if error %}
+      <div class="error">{{ error }}</div>
+      {% endif %}
+
+      <div class="request-box">
+        <p>Sign in to authorize <strong>{{ client_name }}</strong> to access your journal.</p>
+      </div>
+
+      <form method="POST">
+        <input type="hidden" name="action" value="login">
+        <input type="hidden" name="client_id" value="{{ client_id }}">
+        <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
+        <input type="hidden" name="state" value="{{ state }}">
+        <input type="hidden" name="code_challenge" value="{{ code_challenge }}">
+        <input type="hidden" name="code_challenge_method" value="{{ code_challenge_method }}">
+        <input type="hidden" name="scope" value="{{ scope }}">
+        <input type="hidden" name="resource" value="{{ resource }}">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" autofocus>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password">
+        <button type="submit" class="login">Sign in &amp; Continue</button>
+      </form>
+    {% endif %}
+  </div>
+</body>
+</html>

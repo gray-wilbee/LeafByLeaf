@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}{{ target_user.username }} — Admin{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">{{ target_user.username }}</h1>
+  <div class="page-header-actions">
+    <a class="btn-secondary" href="{{ url_for('admin_user_logs', user_id=target_user.id) }}">Logs</a>
+    <a class="btn-secondary" href="{{ url_for('admin_view') }}">All users</a>
+  </div>
+</div>
+<form method="get" class="task-add-bar" style="max-width:220px">
+  <label class="modal-label">Timeframe
+    <select name="days" class="modal-input" onchange="this.form.submit()">
+      {% for d in [7, 30, 90, 365] %}
+      <option value="{{ d }}" {% if days == d %}selected{% endif %}>{{ d }} days</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+<div class="admin-stat-grid">
+  <div class="admin-stat"><span>Logins</span><strong>{{ stats.logins }}</strong></div>
+  <div class="admin-stat"><span>Entries</span><strong>{{ stats.entries }}</strong></div>
+  <div class="admin-stat"><span>Words</span><strong>{{ stats.words }}</strong></div>
+  <div class="admin-stat"><span>Uploads</span><strong>{{ stats.uploads }}</strong></div>
+  <div class="admin-stat"><span>Tasks</span><strong>{{ stats.tasks }}</strong></div>
+  <div class="admin-stat"><span>AI cost</span><strong>${{ '%.4f'|format(ai_usage.get('total', {}).get('cost_usd', 0)) }}</strong></div>
+</div>
+
+<div class="settings-section">
+  <h2>AI Models</h2>
+  <p class="section-desc">Regular handles chat, topic extraction, summaries, and compaction. Lite handles formatting, naming, matching, task parsing, and other lightweight work.</p>
+  <div class="settings-field">
+    <div class="settings-field-header">
+      <label for="admin-model-regular">Regular</label>
+    </div>
+    <select id="admin-model-regular" class="settings-select">
+      {% for opt in model_options.regular %}
+      <option value="{{ opt.key }}" {% if model_settings.regular == opt.key %}selected{% endif %}>{{ opt.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="settings-field">
+    <div class="settings-field-header">
+      <label for="admin-model-lite">Lite</label>
+    </div>
+    <select id="admin-model-lite" class="settings-select">
+      {% for opt in model_options.lite %}
+      <option value="{{ opt.key }}" {% if model_settings.lite == opt.key %}selected{% endif %}>{{ opt.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="settings-actions">
+    <button class="btn-primary" onclick="AdminModels.save({{ target_user.id }})">Save models</button>
+    <span class="settings-status" id="admin-model-status"></span>
+  </div>
+
+  {# ── Advanced: per-function model config ── #}
+  <div class="advanced-toggle" onclick="AdminModels.toggleAdvanced()">
+    Advanced <span id="advanced-arrow">▶</span>
+  </div>
+  <div id="advanced-section" class="hidden">
+    <p class="section-desc" style="margin-top:8px">Override the model and reasoning level for individual AI functions. Leave blank to use the bucket default above.</p>
+    <table class="adv-table">
+      <thead>
+        <tr>
+          <th>Function</th>
+          <th>Bucket</th>
+          <th>Model override</th>
+          <th>Reasoning level</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for func_key, meta in ai_functions.items() %}
+        {% set fsetting = func_settings.get(func_key, {}) %}
+        <tr>
+          <td class="adv-label">{{ meta.label }}</td>
+          <td><span class="adv-bucket">{{ meta.bucket }}</span></td>
+          <td>
+            <select class="adv-select" id="adv-model-{{ func_key }}" data-func="{{ func_key }}" data-field="model">
+              <option value="">— {{ meta.bucket }} default —</option>
+              {% for opt in model_options[meta.bucket] %}
+              <option value="{{ opt.key }}" {% if fsetting.model == opt.key %}selected{% endif %}>{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            <select class="adv-select" id="adv-reasoning-{{ func_key }}" data-func="{{ func_key }}" data-field="reasoning">
+              {% for val, label in reasoning_levels %}
+              <option value="{{ val }}" {% if fsetting.reasoning == val %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="settings-actions" style="margin-top:12px">
+      <button class="btn-primary" onclick="AdminModels.saveAdvanced({{ target_user.id }})">Save advanced</button>
+      <button class="btn-secondary" onclick="AdminModels.resetAdvanced({{ target_user.id }})">Reset all to defaults</button>
+      <span class="settings-status" id="admin-adv-status"></span>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const AdminModels = {
+  save(userId) {
+    const status = document.getElementById('admin-model-status');
+    status.textContent = 'Saving...';
+    status.className = 'settings-status';
+    fetch(`/api/admin/users/${userId}/ai-models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        regular: document.getElementById('admin-model-regular').value,
+        lite: document.getElementById('admin-model-lite').value,
+      }),
+    })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok && data.ok) {
+          status.textContent = 'Saved.';
+          status.className = 'settings-status settings-status--ok';
+        } else {
+          status.textContent = data.error || 'Error saving.';
+          status.className = 'settings-status settings-status--err';
+        }
+        setTimeout(() => { status.textContent = ''; }, 3000);
+      })
+      .catch(() => {
+        status.textContent = 'Network error.';
+        status.className = 'settings-status settings-status--err';
+      });
+  },
+
+  saveAdvanced(userId) {
+    const status = document.getElementById('admin-adv-status');
+    status.textContent = 'Saving...';
+    status.className = 'settings-status';
+    const functions = {};
+    document.querySelectorAll('.adv-select').forEach(el => {
+      const func = el.dataset.func;
+      const field = el.dataset.field;
+      if (!functions[func]) functions[func] = {};
+      functions[func][field] = el.value;
+    });
+    fetch(`/api/admin/users/${userId}/ai-models`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ functions }),
+    })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok && data.ok) {
+          status.textContent = 'Saved.';
+          status.className = 'settings-status settings-status--ok';
+        } else {
+          status.textContent = data.error || 'Error saving.';
+          status.className = 'settings-status settings-status--err';
+        }
+        setTimeout(() => { status.textContent = ''; }, 3000);
+      })
+      .catch(() => {
+        status.textContent = 'Network error.';
+        status.className = 'settings-status settings-status--err';
+      });
+  },
+
+  resetAdvanced(userId) {
+    const functions = {};
+    document.querySelectorAll('.adv-select').forEach(el => {
+      const func = el.dataset.func;
+      const field = el.dataset.field;
+      if (!functions[func]) functions[func] = {};
+      functions[func][field] = '';
+      el.value = '';
+    });
+    AdminModels.saveAdvanced(userId);
+  },
+
+  toggleAdvanced() {
+    const sec = document.getElementById('advanced-section');
+    const arrow = document.getElementById('advanced-arrow');
+    const hidden = sec.classList.toggle('hidden');
+    arrow.textContent = hidden ? '▶' : '▼';
+  }
+};
+</script>
+{% endblock %}

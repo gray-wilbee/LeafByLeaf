@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}Chat — Journal{% endblock %}
+
+{% block head %}
+<script src="{{ url_for('static', filename='chat.js') }}" defer></script>
+{% endblock %}
+
+{% block content %}
+<div class="chat-layout {% if active_chat %}chat-layout--active{% endif %}">
+
+  {# ── Sidebar ── #}
+  <aside class="chat-sidebar">
+    <button class="btn-secondary chat-sidebar-new" onclick="Chat.newChat()">+ New Chat</button>
+    <div class="chat-sidebar-list">
+      {% for c in all_chats %}
+      <a href="{{ url_for('chat_page_active', chat_id=c.id) }}"
+         class="chat-sidebar-item {% if active_chat and active_chat.id == c.id %}chat-sidebar-item--active{% endif %}">
+        <span class="chat-sidebar-title">{{ c.title }}</span>
+        {% if c.scope_names %}<span class="chat-sidebar-scope">{{ c.scope_names }}</span>{% endif %}
+        <span class="chat-sidebar-date">{{ c.created_at[:10] }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </aside>
+
+  {# ── Main panel ── #}
+  <div class="chat-panel">
+    {% if active_chat %}
+
+    {# Panel header with title and rename #}
+    <div class="chat-panel-header">
+      <a class="btn-secondary chat-back-link" href="{{ url_for('chat_page') }}">Back to chats</a>
+      <span class="chat-panel-title" id="chat-panel-title">{{ active_chat.title }}</span>
+      <button type="button" class="btn-secondary js-agent-instructions" onclick="window.openAgentInstructionsModal && window.openAgentInstructionsModal()">Update Agent Instructions</button>
+      <button class="icon-btn" onclick="Chat.renameChat()" title="Rename chat">✎</button>
+    </div>
+
+    {# Scope bar — shows which topics are in context #}
+    {% if scope_tags %}
+    <div class="chat-scope-bar">
+      {% for tag in scope_tags %}
+      <span class="topic-chip" style="--chip-color: {{ tag.color }}">{{ tag.name }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {# Messages — populated by JS on load #}
+    <div class="chat-window" id="chat-window">
+      <div class="chat-messages" id="chat-messages"></div>
+    </div>
+
+    {# Save actions #}
+    <div class="chat-save-actions">
+      <button class="btn-secondary" id="save-summary-btn" onclick="Chat.saveSummary()">Save Summary</button>
+      <button class="btn-secondary" id="save-transcript-btn" onclick="Chat.saveTranscript()">Save Transcript</button>
+    </div>
+
+    {# Saved-as-input notice — shown when chat has already been entered into memory #}
+    {% if saved_as_input %}
+    <div class="chat-saved-notice" id="chat-saved-notice">
+      <span>This chat has been saved as a journal entry. Starting a new chat is recommended.</span>
+      <button class="btn-secondary" onclick="Chat.resumeChat()">Resume Chat</button>
+    </div>
+    {% endif %}
+
+    {# Input form — locked if already saved #}
+    <form class="chat-form{% if saved_as_input %} chat-form--locked{% endif %}" id="chat-form" autocomplete="off">
+      <textarea id="chat-input" class="chat-input" placeholder="Ask anything about your journal…" rows="1" {% if saved_as_input %}disabled{% endif %}></textarea>
+      <button type="submit" class="chat-send" id="chat-send" {% if saved_as_input %}disabled{% endif %}>Send</button>
+    </form>
+
+    <script>const CHAT_ID = {{ active_chat.id }};</script>
+
+    {% else %}
+
+    <div class="chat-empty-state">
+      <p class="text-muted">Select a chat from the sidebar or start a new one.</p>
+      <button type="button" class="btn-secondary js-agent-instructions" onclick="window.openAgentInstructionsModal && window.openAgentInstructionsModal()">Update Agent Instructions</button>
+      <button class="btn-secondary" onclick="Chat.newChat()">+ New Chat</button>
+    </div>
+
+    {% endif %}
+  </div>
+
+</div>
+
+<div id="agent-instructions-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide">
+    <h2 class="modal-title">Agent Instructions</h2>
+    <div class="editor-toolbar">
+      <button type="button" class="btn-secondary" data-editor-wrap="**|**">Bold</button>
+      <button type="button" class="btn-secondary" data-editor-wrap="*|*">Italic</button>
+      <button type="button" class="btn-secondary" data-editor-prefix="- ">List</button>
+      <button type="button" class="btn-secondary" data-editor-prefix="## ">Heading</button>
+    </div>
+    <textarea id="agent-instructions-editor" class="modal-textarea modal-textarea--entry" spellcheck="true">{{ chat_agent_instructions }}</textarea>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button type="button" class="btn-secondary js-agent-instructions-close">Cancel</button>
+      <button type="button" class="btn-save" id="agent-instructions-save">Save</button>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  function editor() { return document.getElementById('agent-instructions-editor'); }
+  function modal() { return document.getElementById('agent-instructions-modal'); }
+
+  window.openAgentInstructionsModal = function() {
+    var m = modal();
+    var e = editor();
+    if (!m || !e) return;
+    m.classList.remove('hidden');
+    e.focus();
+    fetch('/api/chat/instructions')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) { if (data && typeof data.instructions === 'string') e.value = data.instructions; })
+      .catch(function() {});
+  };
+
+  window.closeAgentInstructionsModal = function() {
+    var m = modal();
+    if (m) m.classList.add('hidden');
+  };
+
+  window.saveAgentInstructionsModal = function() {
+    var e = editor();
+    var btn = document.getElementById('agent-instructions-save');
+    if (!e || !btn) return;
+    var old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    fetch('/api/chat/instructions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instructions: e.value })
+    }).then(function(r) {
+      if (!r.ok) throw new Error('Save failed');
+      window.closeAgentInstructionsModal();
+    }).catch(function(err) {
+      alert(err.message || 'Save failed');
+    }).finally(function() {
+      btn.disabled = false;
+      btn.textContent = old;
+    });
+  };
+
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.js-agent-instructions').forEach(function(btn) {
+      btn.addEventListener('click', function(ev) {
+        ev.preventDefault();
+        window.openAgentInstructionsModal();
+      });
+    });
+    document.querySelectorAll('.js-agent-instructions-close').forEach(function(btn) {
+      btn.addEventListener('click', function(ev) {
+        ev.preventDefault();
+        window.closeAgentInstructionsModal();
+      });
+    });
+    var save = document.getElementById('agent-instructions-save');
+    if (save) {
+      save.addEventListener('click', function(ev) {
+        ev.preventDefault();
+        window.saveAgentInstructionsModal();
+      });
+    }
+    var m = modal();
+    if (m) {
+      m.addEventListener('click', function(ev) {
+        if (ev.target === m) window.closeAgentInstructionsModal();
+      });
+    }
+  });
+})();
+</script>
+{% endblock %}

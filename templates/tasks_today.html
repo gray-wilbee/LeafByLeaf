@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Today — Journal{% endblock %}
+
+{% block head %}
+<script src="{{ url_for('static', filename='filters.js') }}" defer></script>
+<script src="{{ url_for('static', filename='tasks.js') }}" defer></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Today</h1>
+  <div class="page-header-actions">
+    {% if suggested_count > 0 %}
+    <a href="{{ url_for('tasks_review') }}" class="btn-secondary">{{ suggested_count }} task{% if suggested_count != 1 %}s{% endif %} to review</a>
+    {% endif %}
+    <a href="{{ url_for('tasks_list') }}" class="btn-secondary">All Tasks</a>
+  </div>
+</div>
+
+{% set total = must|length + should|length + tiny_wins|length %}
+{% if total == 0 %}
+<p class="text-muted today-clear">Nothing needs your attention right now.{% if suggested_count > 0 %} You have {{ suggested_count }} suggested task{% if suggested_count != 1 %}s{% endif %} waiting for review.{% endif %}</p>
+{% endif %}
+
+{# ── Must do ── #}
+{% if must %}
+<section class="tasks-section today-section">
+  <div class="today-section-label today-section-label--must">Must</div>
+  {% for task in must %}
+  <div class="task-row" data-task-id="{{ task.id }}" data-status="{{ task.status }}">
+    <input type="checkbox" class="task-checkbox"
+           {% if task.status == 'done' %}checked{% endif %}
+           onchange="Tasks.toggleDone('{{ task.id }}', this.checked)"
+           onclick="event.stopPropagation()">
+    <span class="task-row-main" onclick="Tasks.openDetail('{{ task.id }}')">
+      {% if task.emoji %}<span class="task-emoji">{{ task.emoji }}</span>{% endif %}
+      <span class="task-row-title">{{ task.title }}</span>
+    </span>
+    <span class="task-row-meta">
+      {% if task.due_at %}
+      <span class="task-due {% if task.due_at[:10] < today %}task-due--overdue{% endif %}">{{ task.due_at[:10] }}</span>
+      {% endif %}
+      <span class="task-priority task-priority--{{ task.priority }}">{{ task.priority }}</span>
+    </span>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# ── Should do ── #}
+{% if should %}
+<section class="tasks-section today-section">
+  <div class="today-section-label today-section-label--should">Should</div>
+  {% for task in should %}
+  <div class="task-row" data-task-id="{{ task.id }}" data-status="{{ task.status }}">
+    <input type="checkbox" class="task-checkbox"
+           onchange="Tasks.toggleDone('{{ task.id }}', this.checked)"
+           onclick="event.stopPropagation()">
+    <span class="task-row-main" onclick="Tasks.openDetail('{{ task.id }}')">
+      {% if task.emoji %}<span class="task-emoji">{{ task.emoji }}</span>{% endif %}
+      <span class="task-row-title">{{ task.title }}</span>
+    </span>
+    <span class="task-row-meta">
+      {% if task.due_at %}<span class="task-due">{{ task.due_at[:10] }}</span>{% endif %}
+      <span class="task-priority task-priority--{{ task.priority }}">{{ task.priority }}</span>
+    </span>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# ── Tiny wins ── #}
+{% if tiny_wins %}
+<section class="tasks-section today-section">
+  <div class="tasks-section-header tasks-section-header--clickable" onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('.tasks-toggle').textContent = this.nextElementSibling.classList.contains('hidden') ? '▶' : '▼'">
+    <span>Tiny Wins <span class="tasks-count">{{ tiny_wins | length }}</span></span>
+    <span class="tasks-toggle">▶</span>
+  </div>
+  <div class="hidden">
+    {% for task in tiny_wins %}
+    <div class="task-row" data-task-id="{{ task.id }}" data-status="{{ task.status }}">
+      <input type="checkbox" class="task-checkbox"
+             onchange="Tasks.toggleDone('{{ task.id }}', this.checked)"
+             onclick="event.stopPropagation()">
+      <span class="task-row-main" onclick="Tasks.openDetail('{{ task.id }}')">
+        {% if task.emoji %}<span class="task-emoji">{{ task.emoji }}</span>{% endif %}
+        <span class="task-row-title">{{ task.title }}</span>
+      </span>
+      <span class="task-row-meta">
+        <span class="task-priority task-priority--{{ task.priority }}">{{ task.priority }}</span>
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{# ── Task detail modal (reused from tasks.js) ── #}
+<div id="task-detail-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide task-detail-card">
+    <div class="task-detail-header">
+      <input id="detail-emoji" type="text" class="task-detail-emoji-input" placeholder="✏️" maxlength="4">
+      <input id="detail-title" type="text" class="task-detail-title-input" placeholder="Task title">
+      <button class="modal-close-btn" onclick="Tasks.closeDetail()">×</button>
+    </div>
+    <div class="task-detail-fields">
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Due date</label>
+        <input type="date" id="detail-due" class="task-detail-input">
+      </div>
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Priority</label>
+        <select id="detail-priority" class="task-detail-select">
+          <option value="high">High</option>
+          <option value="medium" selected>Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Status</label>
+        <select id="detail-status" class="task-detail-select">
+          <option value="open">Open</option>
+          <option value="waiting">Waiting</option>
+          <option value="done">Done</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div id="detail-waiting-row" class="task-detail-field-row hidden">
+        <label class="task-detail-label">Waiting reason</label>
+        <input type="text" id="detail-waiting-reason" class="task-detail-input" placeholder="Waiting for…">
+      </div>
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Repeats</label>
+        <input type="text" id="detail-recurrence" class="task-detail-input" placeholder="every Monday, every 2 weeks...">
+      </div>
+    </div>
+    <div class="task-detail-section">
+      <label class="task-detail-section-label">Notes</label>
+      <textarea id="detail-description" class="task-detail-textarea" rows="3" placeholder="Context or details…"></textarea>
+    </div>
+    <div class="task-detail-section">
+      <label class="task-detail-section-label">Tags</label>
+      <div id="detail-tags" class="task-detail-chips"></div>
+      <div class="task-detail-search-row">
+        <input type="text" id="detail-tag-search" class="task-detail-search-input"
+               placeholder="Search tags…" autocomplete="off"
+               oninput="Tasks.searchTags(this.value)">
+        <div id="detail-tag-results" class="task-detail-results hidden"></div>
+      </div>
+    </div>
+    <div class="task-detail-section">
+      <label class="task-detail-section-label">Depends on</label>
+      <div id="detail-depends" class="task-detail-chips"></div>
+      <div class="task-detail-search-row">
+        <input type="text" id="detail-dep-search" class="task-detail-search-input"
+               placeholder="Search tasks…" autocomplete="off"
+               oninput="Tasks.searchDeps(this.value)">
+        <div id="detail-dep-results" class="task-detail-results hidden"></div>
+      </div>
+    </div>
+    <div class="modal-actions task-detail-actions">
+      <button class="btn-danger" onclick="Tasks.deleteCurrentTask()">Delete</button>
+      <div class="task-detail-actions-right">
+        <button class="btn-secondary" onclick="Tasks.closeDetail()">Cancel</button>
+        <button class="btn-save" onclick="Tasks.saveDetail()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  window.TASK_ALL_TAGS = {{ (task_tags.values() | list | sum(start=[])) | tojson }};
+  window.TASK_TAGS = {{ task_tags | tojson }};
+  window.TODAY = "{{ today }}";
+  window.ACTIVE_TAG_IDS = [];
+  window.INITIAL_TASK_ID = null;
+</script>
+{% endblock %}

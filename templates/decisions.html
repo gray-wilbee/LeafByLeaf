@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+{% block title %}Decision Log — Journal{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Decision Log</h1>
+  <button class="btn-secondary" onclick="Decisions.openCreate()">+ Add</button>
+</div>
+
+{# ── Tabs ── #}
+<div class="task-tabs" id="decision-tabs">
+  <button class="task-tab task-tab--active" onclick="Decisions.setTab('all', this)">All <span class="tasks-count" id="count-all">{{ items|length }}</span></button>
+  <button class="task-tab" onclick="Decisions.setTab('decision', this)">Decisions <span class="tasks-count" id="count-decision">{{ items|selectattr('item_type','eq','decision')|list|length }}</span></button>
+  <button class="task-tab" onclick="Decisions.setTab('open_question', this)">Open Questions <span class="tasks-count" id="count-open_question">{{ items|selectattr('item_type','eq','open_question')|list|length }}</span></button>
+  <button class="task-tab" onclick="Decisions.setTab('revisit_later', this)">Revisit Later <span class="tasks-count" id="count-revisit_later">{{ items|selectattr('item_type','eq','revisit_later')|list|length }}</span></button>
+  <button class="task-tab" onclick="Decisions.setTab('suggested', this)">Suggested <span class="tasks-count" id="count-suggested">{{ items|selectattr('review_status','eq','suggested')|list|length }}</span></button>
+</div>
+
+{# ── Item list ── #}
+<div id="decisions-list">
+  {% if items %}
+    {% for item in items %}
+    <div class="decision-item" data-id="{{ item.id }}" data-type="{{ item.item_type }}" data-review="{{ item.review_status }}">
+      <div class="decision-item-header">
+        <span class="decision-type-badge decision-type-badge--{{ item.item_type }}">
+          {% if item.item_type == 'decision' %}Decision
+          {% elif item.item_type == 'open_question' %}Open Question
+          {% else %}Revisit Later{% endif %}
+        </span>
+        <span class="decision-status-badge decision-status-badge--{{ item.status }}">{{ item.status }}</span>
+        {% if item.review_status == 'suggested' %}
+          <span class="decision-type-badge decision-type-badge--suggested">Suggested</span>
+        {% endif %}
+        <span class="decision-date text-muted">{{ item.created_at[:10] }}</span>
+      </div>
+      <div class="decision-item-title" onclick="Decisions.openDetail('{{ item.id }}')">{{ item.title }}</div>
+      {% if item.content %}
+        <div class="decision-item-preview text-muted">{{ item.content[:160] }}{% if item.content|length > 160 %}…{% endif %}</div>
+      {% endif %}
+      <div class="decision-item-footer">
+        {% set item_tags = tag_map.get(item.id, []) %}
+        {% for tag in item_tags %}
+          <span class="topic-chip" style="--chip-color:{{ tag.color }}">{{ tag.name }}</span>
+        {% endfor %}
+        {% if item.review_status == 'suggested' %}
+          <button class="btn-save decision-action-btn" onclick="Decisions.accept('{{ item.id }}')">Keep</button>
+          <button class="btn-secondary decision-action-btn" onclick="Decisions.dismiss('{{ item.id }}')">Dismiss</button>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty-state">
+      <p>No decision log items yet.</p>
+      <p class="text-muted">Capture decisions, open questions, and things to revisit.</p>
+      <button class="btn-secondary" onclick="Decisions.openCreate()">Add your first item</button>
+    </div>
+  {% endif %}
+</div>
+
+{# ── Create Modal ── #}
+<div id="decision-create-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Add to Decision Log</h3>
+    <label class="modal-label">Type
+      <select id="dc-type" class="modal-input">
+        <option value="decision">Decision</option>
+        <option value="open_question">Open Question</option>
+        <option value="revisit_later">Revisit Later</option>
+      </select>
+    </label>
+    <label class="modal-label">Title *
+      <input type="text" id="dc-title" class="modal-input" placeholder="Summarize in one line…" autocomplete="off">
+    </label>
+    <label class="modal-label">Content
+      <textarea id="dc-content" class="modal-textarea" rows="3" placeholder="Details, context…"></textarea>
+    </label>
+    <label class="modal-label">Rationale
+      <textarea id="dc-rationale" class="modal-textarea" rows="2" placeholder="Why this decision / what makes this open…"></textarea>
+    </label>
+    <label class="modal-label">Status
+      <select id="dc-status" class="modal-input">
+        <option value="open">Open</option>
+        <option value="decided">Decided</option>
+        <option value="deferred">Deferred</option>
+        <option value="reversed">Reversed</option>
+      </select>
+    </label>
+    <label class="modal-label">Topics
+      <input type="text" id="dc-tag-search" class="modal-input" placeholder="Search topics…" autocomplete="off" oninput="Decisions.filterTags(this.value)">
+      <div id="dc-tag-results" class="tag-search-results hidden"></div>
+      <div id="dc-selected-tags" class="selected-tags-row"></div>
+    </label>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="Decisions.closeCreate()">Cancel</button>
+      <button class="btn-save" onclick="Decisions.saveCreate()">Save</button>
+    </div>
+  </div>
+</div>
+
+{# ── Detail / Edit Modal ── #}
+<div id="decision-detail-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <select id="dd-type" class="modal-input" style="width:auto"></select>
+        <select id="dd-status" class="modal-input" style="width:auto"></select>
+      </div>
+      <button class="btn-text" onclick="Decisions.closeDetail()">✕</button>
+    </div>
+    <input type="text" id="dd-title" class="modal-input" style="font-size:1.1rem;font-weight:600;margin-bottom:.75rem">
+    <label class="modal-label">Content
+      <textarea id="dd-content" class="modal-textarea" rows="4"></textarea>
+    </label>
+    <label class="modal-label">Rationale
+      <textarea id="dd-rationale" class="modal-textarea" rows="3"></textarea>
+    </label>
+    <div id="dd-suggested-actions" class="hidden" style="margin:.5rem 0;display:flex;gap:.5rem">
+      <button class="btn-save" onclick="Decisions.acceptCurrent()">Keep</button>
+      <button class="btn-secondary" onclick="Decisions.dismissCurrent()">Dismiss</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary btn-danger" onclick="Decisions.deleteCurrent()">Delete</button>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn-secondary" onclick="Decisions.closeDetail()">Cancel</button>
+        <button class="btn-save" onclick="Decisions.saveDetail()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ALL_TAGS = {{ all_tags | tojson }};
+
+const Decisions = (() => {
+  let currentTab = 'all';
+  let currentId = null;
+  let selectedTagIds = [];
+
+  function setTab(tab, btn) {
+    currentTab = tab;
+    document.querySelectorAll('#decision-tabs .task-tab').forEach(b => b.classList.remove('task-tab--active'));
+    if (btn) btn.classList.add('task-tab--active');
+    document.querySelectorAll('.decision-item').forEach(el => {
+      if (tab === 'all') { el.style.display = ''; return; }
+      if (tab === 'suggested') { el.style.display = el.dataset.review === 'suggested' ? '' : 'none'; return; }
+      el.style.display = el.dataset.type === tab && el.dataset.review !== 'suggested' ? '' : 'none';
+    });
+  }
+
+  function openCreate() {
+    selectedTagIds = [];
+    document.getElementById('dc-title').value = '';
+    document.getElementById('dc-content').value = '';
+    document.getElementById('dc-rationale').value = '';
+    document.getElementById('dc-type').value = 'decision';
+    document.getElementById('dc-status').value = 'open';
+    document.getElementById('dc-selected-tags').innerHTML = '';
+    document.getElementById('dc-tag-results').classList.add('hidden');
+    document.getElementById('decision-create-modal').classList.remove('hidden');
+    document.getElementById('dc-title').focus();
+  }
+
+  function closeCreate() {
+    document.getElementById('decision-create-modal').classList.add('hidden');
+  }
+
+  async function saveCreate() {
+    const title = document.getElementById('dc-title').value.trim();
+    if (!title) { alert('Title is required.'); return; }
+    const body = {
+      item_type: document.getElementById('dc-type').value,
+      title,
+      content: document.getElementById('dc-content').value.trim() || null,
+      rationale: document.getElementById('dc-rationale').value.trim() || null,
+      status: document.getElementById('dc-status').value,
+      tag_ids: selectedTagIds,
+    };
+    const res = await fetch('/api/decisions', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+    if (res.ok) { closeCreate(); location.reload(); }
+    else { alert('Save failed.'); }
+  }
+
+  function filterTags(query) {
+    const box = document.getElementById('dc-tag-results');
+    if (!query.trim()) { box.classList.add('hidden'); return; }
+    const matches = ALL_TAGS.filter(t => t.name.toLowerCase().includes(query.toLowerCase()) && !selectedTagIds.includes(t.id)).slice(0, 8);
+    if (!matches.length) { box.classList.add('hidden'); return; }
+    box.innerHTML = '';
+    matches.forEach(t => {
+      const item = document.createElement('div');
+      item.className = 'tag-search-result';
+      item.style.cursor = 'pointer';
+      item.style.padding = '.25rem .5rem';
+      item.textContent = t.name;
+      item.addEventListener('click', () => Decisions.addTag(t.id, t.name, t.color));
+      box.appendChild(item);
+    });
+    box.classList.remove('hidden');
+  }
+
+  function addTag(id, name, color) {
+    if (selectedTagIds.includes(id)) return;
+    selectedTagIds.push(id);
+    const row = document.getElementById('dc-selected-tags');
+    const chip = document.createElement('span');
+    chip.className = 'topic-chip linked-chip-wrap';
+    chip.style.setProperty('--chip-color', color);
+    chip.dataset.tagId = id;
+    chip.textContent = '';
+    chip.appendChild(document.createTextNode(name + ' '));
+    const remove = document.createElement('button');
+    remove.className = 'linked-chip-remove';
+    remove.type = 'button';
+    remove.textContent = 'x';
+    remove.addEventListener('click', () => Decisions.removeTag(id));
+    chip.appendChild(remove);
+    row.appendChild(chip);
+    document.getElementById('dc-tag-search').value = '';
+    document.getElementById('dc-tag-results').classList.add('hidden');
+  }
+
+  function removeTag(id) {
+    selectedTagIds = selectedTagIds.filter(t => t !== id);
+    document.querySelectorAll('#dc-selected-tags [data-tag-id]').forEach(el => {
+      if (parseInt(el.dataset.tagId) === id) el.remove();
+    });
+  }
+
+  async function openDetail(id) {
+    currentId = id;
+    const res = await fetch(`/api/decisions/${id}`);
+    if (!res.ok) return;
+    const item = await res.json();
+    document.getElementById('dd-type').innerHTML = [
+      ['decision','Decision'],['open_question','Open Question'],['revisit_later','Revisit Later']
+    ].map(([v,l]) => `<option value="${v}"${item.item_type===v?' selected':''}>${l}</option>`).join('');
+    document.getElementById('dd-status').innerHTML = [
+      ['open','Open'],['decided','Decided'],['deferred','Deferred'],['reversed','Reversed']
+    ].map(([v,l]) => `<option value="${v}"${item.status===v?' selected':''}>${l}</option>`).join('');
+    document.getElementById('dd-title').value = item.title;
+    document.getElementById('dd-content').value = item.content || '';
+    document.getElementById('dd-rationale').value = item.rationale || '';
+    const sugAct = document.getElementById('dd-suggested-actions');
+    if (item.review_status === 'suggested') { sugAct.classList.remove('hidden'); sugAct.style.display='flex'; }
+    else { sugAct.classList.add('hidden'); sugAct.style.display=''; }
+    document.getElementById('decision-detail-modal').classList.remove('hidden');
+    document.getElementById('dd-title').focus();
+  }
+
+  function closeDetail() {
+    document.getElementById('decision-detail-modal').classList.add('hidden');
+    currentId = null;
+  }
+
+  async function saveDetail() {
+    if (!currentId) return;
+    const body = {
+      item_type: document.getElementById('dd-type').value,
+      status: document.getElementById('dd-status').value,
+      title: document.getElementById('dd-title').value.trim(),
+      content: document.getElementById('dd-content').value.trim() || null,
+      rationale: document.getElementById('dd-rationale').value.trim() || null,
+    };
+    const res = await fetch(`/api/decisions/${currentId}`, { method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+    if (res.ok) { closeDetail(); location.reload(); }
+    else { alert('Save failed.'); }
+  }
+
+  async function deleteCurrent() {
+    if (!currentId || !confirm('Delete this item?')) return;
+    const res = await fetch(`/api/decisions/${currentId}`, { method: 'DELETE' });
+    if (res.ok) { closeDetail(); location.reload(); }
+  }
+
+  async function accept(id) {
+    await fetch(`/api/decisions/${id}/accept`, { method: 'POST' });
+    location.reload();
+  }
+
+  async function acceptCurrent() { if (currentId) { await accept(currentId); } }
+
+  async function dismiss(id) {
+    await fetch(`/api/decisions/${id}/dismiss`, { method: 'POST' });
+    location.reload();
+  }
+
+  async function dismissCurrent() { if (currentId) { await dismiss(currentId); } }
+
+  // Close modals on overlay click
+  document.getElementById('decision-create-modal').addEventListener('click', e => { if (e.target.id === 'decision-create-modal') closeCreate(); });
+  document.getElementById('decision-detail-modal').addEventListener('click', e => { if (e.target.id === 'decision-detail-modal') closeDetail(); });
+
+  return { setTab, openCreate, closeCreate, saveCreate, filterTags, addTag, removeTag, openDetail, closeDetail, saveDetail, deleteCurrent, accept, acceptCurrent, dismiss, dismissCurrent };
+})();
+</script>
+
+<style>
+.decision-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: .75rem;
+  cursor: default;
+}
+.decision-item-header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: .4rem;
+  flex-wrap: wrap;
+}
+.decision-type-badge {
+  font-size: .7rem;
+  font-weight: 600;
+  padding: .15rem .5rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.decision-type-badge--decision { background: #dbeafe; color: #1d4ed8; }
+.decision-type-badge--open_question { background: #fef9c3; color: #854d0e; }
+.decision-type-badge--revisit_later { background: #ede9fe; color: #6d28d9; }
+.decision-type-badge--suggested { background: #fce7f3; color: #be185d; }
+.decision-status-badge {
+  font-size: .7rem;
+  padding: .15rem .5rem;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+.decision-status-badge--decided { background: #dcfce7; color: #15803d; }
+.decision-date { font-size: .75rem; margin-left: auto; }
+.decision-item-title {
+  font-weight: 600;
+  margin-bottom: .25rem;
+  cursor: pointer;
+}
+.decision-item-title:hover { text-decoration: underline; }
+.decision-item-preview {
+  font-size: .875rem;
+  margin-bottom: .5rem;
+}
+.decision-item-footer {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  flex-wrap: wrap;
+  margin-top: .5rem;
+}
+.decision-action-btn { font-size: .8rem; padding: .2rem .6rem; }
+.empty-state { text-align: center; padding: 3rem 1rem; }
+</style>
+{% endblock %}

@@ -1,0 +1,533 @@
+{% extends "base.html" %}
+{% block title %}Tasks — Journal{% endblock %}
+
+{% block head %}
+<script src="{{ url_for('static', filename='filters.js') }}" defer></script>
+<script src="{{ url_for('static', filename='tasks.js') }}" defer></script>
+{% endblock %}
+
+{% macro _task_row(task, task_tags, today) %}
+<div class="task-row" data-task-id="{{ task.id }}" data-status="{{ task.status }}">
+  <input type="checkbox" class="task-checkbox"
+         {% if task.status == 'done' %}checked{% endif %}
+         onchange="Tasks.toggleDone('{{ task.id }}', this.checked)"
+         onclick="event.stopPropagation()">
+  <span class="task-row-main" onclick="Tasks.openDetail('{{ task.id }}')">
+    {% if task.emoji %}<span class="task-emoji">{{ task.emoji }}</span>{% endif %}
+    <span class="task-row-title {% if task.status == 'done' %}task-row-title--done{% endif %}">{{ task.title }}</span>
+  </span>
+  <span class="task-row-meta">
+    <span class="task-due-wrap" onclick="event.stopPropagation(); Tasks.editDueInline(this, '{{ task.id }}', '{{ task.due_at[:10] if task.due_at else '' }}')">
+      {% if task.due_at %}
+      <span class="task-due {% if task.due_at[:10] < today %}task-due--overdue{% endif %}">{{ task.due_at[:10] }}</span>
+      {% else %}
+      <span class="task-due task-due--none">no date</span>
+      {% endif %}
+    </span>
+    {% if task.recurrence_rule %}<span class="task-recurrence-icon" title="{{ task.recurrence_rule }}">↻</span>{% endif %}
+    <span class="task-priority task-priority--{{ task.priority }}">{{ task.priority }}</span>
+    <select class="task-status-select task-status--{{ task.status }}"
+            onchange="Tasks.setStatus('{{ task.id }}', this.value)"
+            onclick="event.stopPropagation()">
+      <option value="open" {% if task.status == 'open' %}selected{% endif %}>Open</option>
+      <option value="waiting" {% if task.status == 'waiting' %}selected{% endif %}>Waiting</option>
+      <option value="done" {% if task.status == 'done' %}selected{% endif %}>Done</option>
+      <option value="cancelled" {% if task.status == 'cancelled' %}selected{% endif %}>Cancelled</option>
+    </select>
+  </span>
+</div>
+{% endmacro %}
+
+{% block content %}
+{% if from_entry %}
+<nav class="breadcrumbs">
+  <a href="{{ url_for('entry_view', entry_id=from_entry) }}">Entry</a>
+  <span>/</span>
+  <span>Task</span>
+</nav>
+{% endif %}
+
+<div class="page-header">
+  <h1 class="page-title">Tasks</h1>
+  <div class="page-header-actions" id="tab-shared-actions" style="display:none">
+    <button class="btn-secondary" id="group-by-btn" onclick="Tasks.toggleGroupBy()">Group by topic</button>
+  </div>
+  <div class="page-header-actions" id="all-tasks-actions" style="display:none">
+    <button class="btn-secondary" id="select-mode-btn" onclick="Tasks.toggleSelectMode()">Select</button>
+    <button class="btn-secondary" onclick="Tasks.openFilter()">Sort &amp; Filters</button>
+  </div>
+</div>
+
+{# ── Quick add bar (shared across Today + All Tasks tabs) ── #}
+<div class="task-add-bar" id="shared-add-bar">
+  <div class="task-add-row">
+    <input id="task-add-input" type="text" class="task-add-input"
+           placeholder="Add a task… (natural language OK)"
+           autocomplete="off"
+           onkeydown="if(event.key==='Enter'){Tasks.submitIntake()}">
+    <button class="task-add-more" onclick="Tasks.toggleMoreOptions()" id="task-add-more-btn">More options ▾</button>
+    <button class="btn-save task-add-btn" onclick="Tasks.submitIntake()" id="task-add-submit">Add</button>
+  </div>
+  <div id="task-add-more" class="task-add-more-panel hidden">
+    <label class="task-add-more-label">Due date
+      <input type="date" id="task-add-due" class="task-add-more-input">
+    </label>
+    <label class="task-add-more-label">Priority
+      <select id="task-add-priority" class="task-add-more-select">
+        <option value="">Auto-detect</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+    </label>
+  </div>
+</div>
+
+{# ── Inline tag filter bar (shared: Today + All tabs) ── #}
+<div class="task-filter-bar" id="task-filter-bar" style="display:none">
+  <input type="search" id="task-filter-search" class="task-filter-search"
+         placeholder="Filter tags…" autocomplete="off"
+         oninput="Tasks._filterChipSearch(this.value)">
+  <div class="task-filter-chips" id="task-filter-chips"></div>
+</div>
+
+{# ── Tab bar ─────────────────────────────────────── #}
+<div class="task-tabs" id="task-tabs">
+  <button class="task-tab" id="tab-btn-review" onclick="TaskTabs.show('review')">
+    Review{% if suggested|length > 0 %}<span class="tab-badge">{{ suggested|length }}</span>{% endif %}
+  </button>
+  <button class="task-tab" id="tab-btn-today" onclick="TaskTabs.show('today')">Today</button>
+  <button class="task-tab" id="tab-btn-all" onclick="TaskTabs.show('all')">All Tasks</button>
+</div>
+
+{# ══════════════════════════════════════════════════ #}
+{# TAB: REVIEW                                        #}
+{# ══════════════════════════════════════════════════ #}
+<div class="tab-panel" id="tab-review">
+  {% if suggested %}
+  <div class="review-queue" id="review-queue">
+    {% for task in suggested %}
+    <div class="review-card" id="review-card-{{ task.id }}" data-task-id="{{ task.id }}">
+      <div class="review-card-header">
+        <span class="review-card-title">
+          {% if task.emoji %}<span class="task-emoji">{{ task.emoji }}</span>{% endif %}
+          {{ task.title }}
+        </span>
+        <span class="review-card-meta">
+          {% if task.priority == 'high' %}<span class="task-priority task-priority--high">high</span>{% endif %}
+          {% if task.due_at %}<span class="task-due">{{ task.due_at[:10] }}</span>{% endif %}
+        </span>
+      </div>
+      {% if task.description %}
+      <p class="review-card-desc">{{ task.description }}</p>
+      {% endif %}
+      {% if task.source_entry_id and entry_titles.get(task.source_entry_id) %}
+      <p class="review-card-source">From: {{ entry_titles[task.source_entry_id] }}</p>
+      {% endif %}
+      {% set task_tag_list = task_tags.get(task.id, []) %}
+      {% if task_tag_list %}
+      <div class="review-card-tags">
+        {% for tag in task_tag_list %}
+        <span class="chip" style="border-color:{{ tag.color }}; color:{{ tag.color }}">{{ tag.name }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="review-card-actions">
+        <button class="btn-save review-btn" onclick="Review.accept('{{ task.id }}')">Keep</button>
+        <button class="btn-secondary review-btn" onclick="Review.showSnooze('{{ task.id }}')">Later</button>
+        <button class="btn-secondary review-btn review-btn--danger" onclick="Review.reject('{{ task.id }}')">Not a task</button>
+      </div>
+      <div class="review-snooze-row hidden" id="snooze-row-{{ task.id }}">
+        <input type="date" class="review-snooze-input" id="snooze-date-{{ task.id }}">
+        <button class="btn-secondary review-btn" onclick="Review.snooze('{{ task.id }}')">Park until date</button>
+        <button class="btn-secondary review-btn" onclick="Review.hideSnooze('{{ task.id }}')">Cancel</button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="tasks-empty-state">
+    <p class="text-muted">No suggested tasks waiting for review.</p>
+    {% if today_has_tasks %}
+    <p class="text-muted">
+      <a href="#" onclick="TaskTabs.show('today'); return false;" class="empty-state-link">See today's tasks →</a>
+    </p>
+    {% else %}
+    <p class="text-muted">
+      <a href="#" onclick="TaskTabs.show('all'); return false;" class="empty-state-link">View all tasks →</a>
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{# ══════════════════════════════════════════════════ #}
+{# TAB: TODAY                                         #}
+{# ══════════════════════════════════════════════════ #}
+<div class="tab-panel hidden" id="tab-today">
+
+{# Must #}
+{% if must %}
+<section class="tasks-section today-section" id="section-today-must">
+  <div class="today-section-label today-section-label--must">Must</div>
+  {% for task in must %}
+  {{ _task_row(task, task_tags, today) }}
+  {% endfor %}
+</section>
+{% endif %}
+
+{# Should #}
+{% if should %}
+<section class="tasks-section today-section" id="section-today-should">
+  <div class="today-section-label today-section-label--should">Should</div>
+  {% for task in should %}
+  {{ _task_row(task, task_tags, today) }}
+  {% endfor %}
+</section>
+{% endif %}
+
+{# Tiny Wins (collapsed) #}
+{% if tiny_wins %}
+<section class="tasks-section today-section tasks-section--collapsed">
+  <div class="tasks-section-header tasks-section-header--clickable" onclick="Tasks.toggleSection('today-tiny')">
+    <span>Tiny Wins <span class="tasks-count">{{ tiny_wins|length }}</span></span>
+    <span class="tasks-toggle" id="toggle-today-tiny">▶</span>
+  </div>
+  <div id="section-today-tiny" class="hidden">
+    {% for task in tiny_wins %}
+    {{ _task_row(task, task_tags, today) }}
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if not must and not should and not tiny_wins %}
+<div class="tasks-empty-state">
+  <p class="text-muted">All done for today.</p>
+  <p class="text-muted">
+    <a href="#" onclick="TaskTabs.show('all'); return false;" class="empty-state-link">View all tasks →</a>
+  </p>
+</div>
+{% endif %}
+
+</div>{# end tab-today #}
+
+{# ══════════════════════════════════════════════════ #}
+{# TAB: ALL TASKS                                     #}
+{# ══════════════════════════════════════════════════ #}
+<div class="tab-panel hidden" id="tab-all">
+
+{# Active tasks #}
+<section class="tasks-section" id="section-active">
+  {% if active_tasks %}
+    {% for task in active_tasks %}
+    {{ _task_row(task, task_tags, today) }}
+    {% endfor %}
+  {% else %}
+    <p class="text-muted tasks-empty">No active tasks.</p>
+  {% endif %}
+</section>
+
+{# Done (collapsed) #}
+{% if done_tasks %}
+<section class="tasks-section tasks-section--collapsed">
+  <div class="tasks-section-header tasks-section-header--clickable" onclick="Tasks.toggleSection('done')">
+    <span>Done <span class="tasks-count">{{ done_tasks|length }}</span></span>
+    <span class="tasks-toggle" id="toggle-done">{% if show_done %}▼{% else %}▶{% endif %}</span>
+  </div>
+  <div id="section-done" class="{% if not show_done %}hidden{% endif %}">
+    {% for task in done_tasks %}
+    <div class="task-row" data-task-id="{{ task.id }}" data-status="{{ task.status }}">
+      <input type="checkbox" class="task-checkbox" checked
+             onchange="Tasks.toggleDone('{{ task.id }}', this.checked)"
+             onclick="event.stopPropagation()">
+      <span class="task-row-main" onclick="Tasks.openDetail('{{ task.id }}')">
+        {% if task.emoji %}<span class="task-emoji">{{ task.emoji }}</span>{% endif %}
+        <span class="task-row-title task-row-title--done">{{ task.title }}</span>
+      </span>
+      <span class="task-row-meta">
+        {% if task.due_at %}<span class="task-due">{{ task.due_at[:10] }}</span>{% endif %}
+        <span class="task-priority task-priority--{{ task.priority }}">{{ task.priority }}</span>
+        <select class="task-status-select task-status--{{ task.status }}"
+                onchange="Tasks.setStatus('{{ task.id }}', this.value)"
+                onclick="event.stopPropagation()">
+          <option value="open">Open</option>
+          <option value="waiting">Waiting</option>
+          <option value="done" selected>Done</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{# Cancelled (collapsed) #}
+{% if cancelled_tasks %}
+<section class="tasks-section tasks-section--collapsed">
+  <div class="tasks-section-header tasks-section-header--clickable" onclick="Tasks.toggleSection('cancelled')">
+    <span>Cancelled <span class="tasks-count">{{ cancelled_tasks|length }}</span></span>
+    <span class="tasks-toggle" id="toggle-cancelled">▶</span>
+  </div>
+  <div id="section-cancelled" class="hidden">
+    {% for task in cancelled_tasks %}
+    <div class="task-row" data-task-id="{{ task.id }}" data-status="{{ task.status }}">
+      <input type="checkbox" class="task-checkbox"
+             onchange="Tasks.toggleDone('{{ task.id }}', this.checked)"
+             onclick="event.stopPropagation()">
+      <span class="task-row-main" onclick="Tasks.openDetail('{{ task.id }}')">
+        {% if task.emoji %}<span class="task-emoji">{{ task.emoji }}</span>{% endif %}
+        <span class="task-row-title task-row-title--done">{{ task.title }}</span>
+      </span>
+      <span class="task-row-meta">
+        {% if task.due_at %}<span class="task-due">{{ task.due_at[:10] }}</span>{% endif %}
+        <span class="task-priority task-priority--{{ task.priority }}">{{ task.priority }}</span>
+        <select class="task-status-select task-status--{{ task.status }}"
+                onchange="Tasks.setStatus('{{ task.id }}', this.value)"
+                onclick="event.stopPropagation()">
+          <option value="open">Open</option>
+          <option value="waiting">Waiting</option>
+          <option value="done">Done</option>
+          <option value="cancelled" selected>Cancelled</option>
+        </select>
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+</div>{# end tab-all #}
+
+{# ══════════════════════════════════════════════════ #}
+{# SHARED MODALS (used by Today + All Tasks tabs)     #}
+{# ══════════════════════════════════════════════════ #}
+
+{# Sort & Filters modal #}
+<div id="filter-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h2 class="modal-title">Sort &amp; Filters</h2>
+    <div class="filter-saved-row">
+      <select id="task-saved-filters" class="modal-input" onchange="SavedFilters.apply('task-saved-filters', '/tasks')">
+        <option value="">Saved filters...</option>
+      </select>
+      <button class="btn-secondary" onclick="Tasks.saveCurrentFilter()">Save</button>
+    </div>
+    <label class="modal-label">Sort by
+      <select id="filter-sort" class="modal-input">
+        <option value="default" {% if sort_by == 'default' %}selected{% endif %}>Due date + Priority</option>
+        <option value="priority" {% if sort_by == 'priority' %}selected{% endif %}>Priority</option>
+        <option value="created" {% if sort_by == 'created' %}selected{% endif %}>Created date</option>
+      </select>
+    </label>
+    <label class="modal-label modal-label--checkbox">
+      <input type="checkbox" id="filter-show-done" {% if show_done %}checked{% endif %}>
+      Show completed tasks
+    </label>
+    <label class="modal-label modal-label--checkbox">
+      <input type="checkbox" id="filter-show-cancelled" {% if show_cancelled %}checked{% endif %}>
+      Show cancelled tasks
+    </label>
+    <div class="modal-label">Filter by tag</div>
+    <div class="filter-tag-section">
+      <div class="filter-tag-tabs">
+        <button class="filter-tab filter-tab--active" data-tab="topics" onclick="Tasks.switchFilterTab('topics')">Topics</button>
+        <button class="filter-tab" data-tab="entities" onclick="Tasks.switchFilterTab('entities')">Entities</button>
+      </div>
+      <input type="text" id="filter-tag-search" class="modal-input" placeholder="Search tags..." autocomplete="off" oninput="Tasks.filterTagSearch(this.value)">
+      <div id="filter-tag-list" class="filter-tag-list">
+        <div id="filter-tab-topics" class="filter-tab-content">
+          {% for tag in topic_tree_tags %}
+          <label class="filter-tag-item {% if tag.depth > 0 %}filter-tag-item--child filter-tag-item--collapsed{% endif %}" data-parent-id="{{ tag.parent_tag_id or '' }}" style="--tag-depth: {{ tag.depth }}">
+            {% if tag.has_children %}
+            <button type="button" class="filter-tag-expand" data-tag-id="{{ tag.id }}" aria-expanded="false">▸</button>
+            {% else %}
+            <span class="filter-tag-spacer"></span>
+            {% endif %}
+            <input type="checkbox" value="{{ tag.id }}" {% if tag.id in active_tag_ids %}checked{% endif %}>
+            <span class="filter-tag-dot" style="background:{{ tag.color }}"></span>{{ tag.name }}
+          </label>
+          {% endfor %}
+        </div>
+        <div id="filter-tab-entities" class="filter-tab-content hidden">
+          {% for ent in all_tags if ent.kind == 'entity' %}
+          <label class="filter-tag-item">
+            <input type="checkbox" value="{{ ent.id }}" {% if ent.id in active_tag_ids %}checked{% endif %}>
+            <span class="filter-tag-dot" style="background:{{ ent.color }}"></span>{{ ent.name }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="Tasks.closeFilter()">Cancel</button>
+      <button class="btn-save" onclick="Tasks.applyFilter()">Apply</button>
+    </div>
+  </div>
+</div>
+
+{# Task detail modal #}
+<div id="task-detail-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide task-detail-card">
+    <div class="task-detail-header">
+      <input id="detail-emoji" type="text" class="task-detail-emoji-input" placeholder="✏️" maxlength="4">
+      <input id="detail-title" type="text" class="task-detail-title-input" placeholder="Task title">
+      <button class="modal-close-btn" onclick="Tasks.closeDetail()">×</button>
+    </div>
+    <div class="task-detail-fields">
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Due date</label>
+        <input type="date" id="detail-due" class="task-detail-input">
+      </div>
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Priority</label>
+        <select id="detail-priority" class="task-detail-select">
+          <option value="high">High</option>
+          <option value="medium" selected>Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Status</label>
+        <select id="detail-status" class="task-detail-select">
+          <option value="open">Open</option>
+          <option value="waiting">Waiting</option>
+          <option value="done">Done</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div id="detail-waiting-row" class="task-detail-field-row hidden">
+        <label class="task-detail-label">Waiting reason</label>
+        <input type="text" id="detail-waiting-reason" class="task-detail-input" placeholder="Waiting for…">
+      </div>
+      <div class="task-detail-field-row">
+        <label class="task-detail-label">Repeats</label>
+        <input type="text" id="detail-recurrence" class="task-detail-input" placeholder="every Monday, every 2 weeks...">
+      </div>
+    </div>
+    <div class="task-detail-section">
+      <label class="task-detail-section-label">Notes</label>
+      <textarea id="detail-description" class="task-detail-textarea" rows="3" placeholder="Context or details…"></textarea>
+    </div>
+    <div class="task-detail-section">
+      <label class="task-detail-section-label">Tags</label>
+      <div id="detail-tags" class="task-detail-chips"></div>
+      <div class="task-detail-search-row">
+        <input type="text" id="detail-tag-search" class="task-detail-search-input"
+               placeholder="Search tags…" autocomplete="off"
+               oninput="Tasks.searchTags(this.value)">
+        <div id="detail-tag-results" class="task-detail-results hidden"></div>
+      </div>
+    </div>
+    <div class="task-detail-section">
+      <label class="task-detail-section-label">Depends on</label>
+      <div id="detail-depends" class="task-detail-chips"></div>
+      <div class="task-detail-search-row">
+        <input type="text" id="detail-dep-search" class="task-detail-search-input"
+               placeholder="Search tasks…" autocomplete="off"
+               oninput="Tasks.searchDeps(this.value)">
+        <div id="detail-dep-results" class="task-detail-results hidden"></div>
+      </div>
+    </div>
+    <div class="modal-actions task-detail-actions">
+      <button class="btn-danger" onclick="Tasks.deleteCurrentTask()">Delete</button>
+      <div class="task-detail-actions-right">
+        <button class="btn-secondary" onclick="Tasks.closeDetail()">Cancel</button>
+        <button class="btn-save" onclick="Tasks.saveDetail()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# Bulk action bar #}
+<div id="bulk-bar" class="bulk-bar hidden" role="toolbar" aria-label="Bulk actions">
+  <span id="bulk-count" class="bulk-count">0 selected</span>
+  <button class="bulk-bar-btn" onclick="Tasks.bulkSelectAll()">All</button>
+  <div class="bulk-bar-actions">
+    <button class="bulk-bar-btn bulk-bar-action" onclick="Tasks.bulkAction('done')" disabled>Mark done</button>
+    <button class="bulk-bar-btn bulk-bar-action" onclick="Tasks.bulkAction('cancelled')" disabled>Cancel</button>
+    <button class="bulk-bar-btn bulk-bar-action bulk-bar-btn--danger" onclick="Tasks.bulkAction('delete')" disabled>Delete</button>
+  </div>
+  <button class="bulk-bar-close" onclick="Tasks.exitSelectMode()" aria-label="Exit select mode">✕</button>
+</div>
+
+<script>
+  const Review = {
+    async accept(taskId) {
+      const r = await fetch(`/api/tasks/${taskId}/accept`, {method: 'POST'});
+      if (r.ok) Review._removeCard(taskId);
+    },
+    async reject(taskId) {
+      const r = await fetch(`/api/tasks/${taskId}/reject`, {method: 'POST'});
+      if (r.ok) Review._removeCard(taskId);
+    },
+    showSnooze(taskId) {
+      document.getElementById(`snooze-row-${taskId}`).classList.remove('hidden');
+    },
+    hideSnooze(taskId) {
+      document.getElementById(`snooze-row-${taskId}`).classList.add('hidden');
+    },
+    async snooze(taskId) {
+      const due_at = document.getElementById(`snooze-date-${taskId}`).value || null;
+      const r = await fetch(`/api/tasks/${taskId}/snooze`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({due_at})
+      });
+      if (r.ok) Review._removeCard(taskId);
+    },
+    _removeCard(taskId) {
+      const card = document.getElementById(`review-card-${taskId}`);
+      if (!card) return;
+      card.style.opacity = '0';
+      card.style.transform = 'translateX(20px)';
+      setTimeout(() => {
+        card.remove();
+        const queue = document.getElementById('review-queue');
+        if (queue && !queue.querySelector('.review-card')) {
+          queue.innerHTML = '<p class="text-muted" style="padding:2rem 0">All caught up.</p>';
+        }
+        const badge = document.querySelector('.nav-badge');
+        if (badge) {
+          const count = document.querySelectorAll('.review-card').length;
+          if (count === 0) badge.remove();
+          else badge.textContent = count;
+        }
+      }, 200);
+    }
+  };
+
+  window.TASK_ALL_TAGS = {{ all_tags | tojson }};
+  window.TASK_TAGS = {{ task_tags | tojson }};
+  window.TODAY = "{{ today }}";
+  window.ACTIVE_TAG_IDS = {{ active_tag_ids | tojson }};
+  window.INITIAL_TASK_ID = {{ request.args.get('task') | tojson }};
+
+  const TaskTabs = {
+    show(tab) {
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+      document.querySelectorAll('.task-tab').forEach(b => b.classList.remove('task-tab--active'));
+      document.getElementById('tab-' + tab).classList.remove('hidden');
+      document.getElementById('tab-btn-' + tab).classList.add('task-tab--active');
+      // Show group-by btn on today + all; hide on review
+      document.getElementById('tab-shared-actions').style.display = (tab === 'review') ? 'none' : '';
+      // Show select/filter actions only on all tab
+      document.getElementById('all-tasks-actions').style.display = (tab === 'all') ? '' : 'none';
+      // Hide quick-add bar and filter bar on review tab; show on today/all
+      const notReview = (tab !== 'review');
+      document.getElementById('shared-add-bar').style.display = notReview ? '' : 'none';
+      document.getElementById('task-filter-bar').style.display = notReview ? '' : 'none';
+      // Update URL without reload
+      const url = new URL(window.location);
+      url.searchParams.set('tab', tab);
+      history.replaceState(null, '', url.toString());
+      // Notify tasks.js (if loaded) to reapply group-by for this tab
+      if (typeof Tasks !== 'undefined') Tasks._onTabShow(tab);
+    }
+  };
+
+  // Activate default tab
+  TaskTabs.show('{{ default_tab }}');
+</script>
+{% endblock %}

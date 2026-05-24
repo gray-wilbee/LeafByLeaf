@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}{{ date }} {{ time_str }} — Journal{% endblock %}
+
+{% block content %}
+<nav class="breadcrumbs">
+  <a href="{{ url_for('index') }}">Journal</a>
+  <span>/</span>
+  <span>{{ entry_title }}</span>
+</nav>
+<div class="page-header">
+  <div class="entry-nav">
+    {% if prev_entry is defined and prev_entry %}
+    <a href="{{ url_for('entry_view', entry_id=prev_entry.id) }}" class="day-nav-btn" title="Older entry">&#8592; {{ prev_entry.date }} {{ prev_entry.time }}</a>
+    {% else %}
+    <span class="day-nav-btn day-nav-btn--disabled">&#8592;</span>
+    {% endif %}
+
+    <div class="entry-heading">
+      <span class="entry-heading-date">{{ entry_title }}</span>
+      <span class="entry-heading-time">{{ display_datetime }}</span>
+    </div>
+
+    {% if next_entry is defined and next_entry %}
+    <a href="{{ url_for('entry_view', entry_id=next_entry.id) }}" class="day-nav-btn" title="Newer entry">{{ next_entry.date }} {{ next_entry.time }} &#8594;</a>
+    {% else %}
+    <span class="day-nav-btn day-nav-btn--disabled">&#8594;</span>
+    {% endif %}
+  </div>
+  {% if editable %}
+  <button class="edit-btn" onclick="toggleEntryEdit()" id="entry-edit-toggle">Edit</button>
+  {% endif %}
+</div>
+
+{% if entry_tags %}
+<div class="day-tags day-tags--standalone">
+  {% for tag in entry_tags %}
+  <a href="{{ url_for('entity_detail', entity_id=tag.id) if tag.kind == 'entity' else url_for('topic_detail', topic_id=tag.id) }}" class="topic-chip" style="--chip-color: {{ tag.color }};">{{ tag.name }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if entry_tasks %}
+<div class="day-tasks">
+  {% for task in entry_tasks %}
+  <a href="{{ url_for('tasks_list') }}" class="task-chip">
+    <span>{{ task.title }}</span>
+    <span class="task-status task-status--{{ task.status }}">{{ task.status }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if extraction %}
+<details class="topic-section extraction-panel">
+  <summary class="extraction-summary-row">
+    <span>Extraction report</span>
+    <span class="text-muted">{{ extraction["items"]|length }} items</span>
+  </summary>
+  <div class="extraction-panel-body">
+  {% if extraction.summary %}
+  <p class="text-muted">{{ extraction.summary }}</p>
+  {% endif %}
+  <div class="extraction-items">
+    {% for item in extraction["items"] %}
+    <div class="extraction-item {% if item.soft_deleted %}extraction-item--deleted{% endif %}" data-item-id="{{ item.id }}" style="{% if item.color %}--chip-color: {{ item.color }};{% endif %}">
+      <span class="extraction-item-kind">{{ 'duplicate' if item.item_type == 'task_duplicate' else item.item_type }}</span>
+      {% if item.url %}
+      <a class="extraction-item-name" href="{{ item.url }}">{% if item.emoji %}<span class="task-emoji">{{ item.emoji }}</span> {% endif %}{{ item.name }}</a>
+      {% else %}
+      <span class="extraction-item-name">{% if item.emoji %}<span class="task-emoji">{{ item.emoji }}</span> {% endif %}{{ item.name }}</span>
+      {% endif %}
+      {% if item.item_type == 'task' %}
+      <button class="icon-btn icon-btn--small extraction-delete" onclick="EntryExtraction.remove({{ item.id }})" title="Remove">×</button>
+      <button class="icon-btn icon-btn--small extraction-restore" onclick="EntryExtraction.restore({{ item.id }})" title="Restore">↻</button>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class="extraction-followup-row">
+    <button class="btn-secondary" onclick="EntryExtraction.startFollowup()">Chat about this entry</button>
+  </div>
+  </div>
+</details>
+{% endif %}
+
+<div id="entry-edit-form" class="hidden">
+  <form method="POST" action="{{ url_for('entry_edit', entry_id=entry_id) }}" class="edit-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="entry-edit-meta">
+      <label class="entry-edit-label">Date
+        <input type="date" name="date" value="{{ date }}" class="entry-edit-input" required>
+      </label>
+      <label class="entry-edit-label">Time <span class="text-muted">(HH:MM:SS)</span>
+        <input type="text" name="time" value="{{ time_str }}" pattern="\d{2}:\d{2}:\d{2}" class="entry-edit-input" required>
+      </label>
+    </div>
+    <textarea name="content" class="edit-textarea" rows="20" spellcheck="true">{{ raw_content }}</textarea>
+    <div class="edit-actions">
+      <button type="submit" class="btn-save">Save</button>
+      <button type="button" class="btn-cancel" onclick="toggleEntryEdit()">Cancel</button>
+    </div>
+  </form>
+</div>
+
+<div id="entry-content" class="journal-content">
+  {{ html_content|safe }}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleEntryEdit() {
+  const btn = document.getElementById('entry-edit-toggle');
+  if (!btn) return;
+  const form = document.getElementById('entry-edit-form');
+  const content = document.getElementById('entry-content');
+  const editing = form.classList.contains('hidden');
+  form.classList.toggle('hidden', !editing);
+  content.classList.toggle('hidden', editing);
+  btn.textContent = editing ? 'Cancel' : 'Edit';
+}
+
+// ── Topic highlights ──────────────────────────────────────────
+const HIGHLIGHTS = {{ highlights | tojson }};
+
+function highlightText(root, text, topicId, topicName, color) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const nodes = [];
+  let node;
+  while ((node = walker.nextNode())) nodes.push(node);
+
+  for (const textNode of nodes) {
+    const idx = textNode.textContent.indexOf(text);
+    if (idx === -1) continue;
+    const parent = textNode.parentNode;
+    if (!parent || parent.closest('.hl')) continue; // avoid double-wrapping
+    const before = document.createTextNode(textNode.textContent.slice(0, idx));
+    const span = document.createElement('span');
+    span.className = 'hl';
+    span.style.setProperty('--chip-color', color);
+    span.dataset.topic = topicName;
+    span.dataset.topicId = topicId;
+    span.textContent = text;
+    span.addEventListener('click', () => {
+      window.location.href = '/topics/' + topicId;
+    });
+    const after = document.createTextNode(textNode.textContent.slice(idx + text.length));
+    parent.insertBefore(before, textNode);
+    parent.insertBefore(span, textNode);
+    parent.insertBefore(after, textNode);
+    parent.removeChild(textNode);
+    break; // only first occurrence per sentence
+  }
+}
+
+function applyHighlights(highlights) {
+  if (!highlights || !highlights.length) return;
+  const container = document.getElementById('entry-content');
+  if (!container) return;
+  // Longer sentences first to prevent partial overlaps
+  highlights.sort((a, b) => b.sentence.length - a.sentence.length);
+  for (const h of highlights) {
+    if (!h.sentence || h.sentence.length < 10) continue;
+    highlightText(container, h.sentence, h.topic_id, h.name, h.color);
+  }
+}
+
+applyHighlights(HIGHLIGHTS);
+
+const EntryExtraction = {
+  async remove(itemId) {
+    await fetch(`/api/extraction-items/${itemId}/delete`, { method: 'POST' });
+    document.querySelector(`[data-item-id="${itemId}"]`)?.classList.add('extraction-item--deleted');
+  },
+  async restore(itemId) {
+    await fetch(`/api/extraction-items/${itemId}/restore`, { method: 'POST' });
+    document.querySelector(`[data-item-id="${itemId}"]`)?.classList.remove('extraction-item--deleted');
+  },
+  async startFollowup() {
+    const r = await fetch(`/api/entries/{{ entry_id }}/follow-up-chat`, { method: 'POST' });
+    const data = await r.json();
+    if (data.redirect) window.location.href = data.redirect;
+  }
+};
+</script>
+{% endblock %}

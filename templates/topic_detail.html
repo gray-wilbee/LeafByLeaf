@@ -1,0 +1,423 @@
+{% extends "base.html" %}
+{% block title %}{{ topic.name }} — Topics{% endblock %}
+
+{% block head %}
+<script>
+  const TOPIC_ID = {{ topic.id }};
+  const PARENT_ID = {{ parent.id if parent else 'null' }};
+</script>
+{% endblock %}
+
+{% block content %}
+<nav class="breadcrumbs">
+  {% if from_entry %}
+  <a href="{{ url_for('entry_view', entry_id=from_entry) }}">Entry</a>
+  <span>/</span>
+  {% endif %}
+  <a href="{{ url_for('topics_list') }}">Topics</a>
+  <span>/</span>
+  <span>{{ topic.name }}</span>
+</nav>
+<!-- Header -->
+<div class="topic-header" id="topic-header" style="--topic-color: {{ topic.color }};">
+  <div class="topic-header-accent"></div>
+  <div class="topic-header-body">
+
+    <div class="topic-name-row">
+      <h1 class="topic-name" id="topic-name-display">{{ topic.name }}</h1>
+      <button class="icon-btn" onclick="Topics.editName()" title="Edit name">✎</button>
+    </div>
+
+    <div class="topic-parent-row">
+      {% if parent %}
+        <span class="text-muted" style="font-size:0.85rem;">Subtopic of</span>
+        <a href="{{ url_for('topic_detail', topic_id=parent.id) }}"
+           class="topic-chip topic-chip--link" style="--chip-color: {{ parent.color }}">{{ parent.name }}</a>
+        <button class="icon-btn icon-btn--small" onclick="Topics.clearParent()" title="Remove parent">✕</button>
+      {% else %}
+        <button class="btn-text" onclick="Topics.openSetParent()">+ Set parent topic</button>
+      {% endif %}
+    </div>
+
+    <div class="topic-desc-row">
+      <p class="topic-desc" id="topic-desc-display">{{ topic.description or 'No description.' }}</p>
+      <button class="icon-btn" onclick="Topics.editDesc()" title="Edit description">✎</button>
+      <button class="btn-secondary" onclick="Topics.refreshDescription()">Refresh description</button>
+    </div>
+
+    <div class="topic-actions">
+      <button class="btn-secondary" onclick="Topics.compact()">Compact</button>
+      <button class="btn-secondary" onclick="Topics.openMerge()">Merge</button>
+      <button class="btn-danger" onclick="Topics.deleteTopic()">Delete</button>
+    </div>
+
+    <div class="color-picker">
+      {% for color in palette %}
+      <button class="color-swatch {% if color == topic.color %}active{% endif %}"
+              style="background: {{ color }};"
+              data-color="{{ color }}"
+              onclick="Topics.setColor('{{ color }}')"
+              title="{{ color }}"></button>
+      {% endfor %}
+    </div>
+
+  </div>
+</div>
+
+<!-- Subtopics -->
+<section class="topic-section">
+  <div class="section-header">
+    <h2>Subtopics{% if children %} ({{ children|length }}){% endif %}</h2>
+    <button class="btn-secondary" onclick="Topics.openCreateSubtopic()">New subtopic</button>
+  </div>
+  {% if children %}
+  <div class="subtopic-chips" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;">
+    {% for child in children %}
+    <a href="{{ url_for('topic_detail', topic_id=child.id) }}"
+       class="topic-chip topic-chip--link" style="--chip-color: {{ child.color }}">{{ child.name }}</a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-muted">No subtopics yet.</p>
+  {% endif %}
+</section>
+
+<!-- Summary -->
+<section class="topic-section">
+  <div class="section-header">
+    <h2>Summary</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn-secondary" onclick="Topics.editSummary()" id="summary-edit-btn">Edit</button>
+      <button class="btn-secondary" id="summary-refresh-btn" onclick="Topics.refreshSummary()">
+        {{ 'Refresh summary' if topic.summary else 'Create summary' }}
+      </button>
+    </div>
+  </div>
+  <div id="topic-summary-wrap">
+    {% if topic.summary %}
+    <div class="topic-summary" id="topic-summary">{{ topic.summary_html|safe }}</div>
+    {% else %}
+    <p class="text-muted" id="topic-summary-empty">No summary yet. Click "Create summary" to generate one.</p>
+    {% endif %}
+  </div>
+  <!-- Edit summary form (hidden by default) -->
+  <div id="summary-edit-area" class="hidden" style="margin-top:10px;">
+    <textarea id="summary-edit-textarea" class="modal-textarea modal-textarea--entry" style="min-height:200px;" placeholder="Write summary in markdown…">{{ topic.summary or '' }}</textarea>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+      <button class="btn-cancel" onclick="Topics.cancelSummaryEdit()">Cancel</button>
+      <button class="btn-save" onclick="Topics.saveSummaryEdit()">Save</button>
+    </div>
+  </div>
+</section>
+
+<section class="topic-section">
+  <div class="section-header">
+    <h2>Connections</h2>
+    <button class="btn-secondary" onclick="Topics.openLinkModal()">+ Add</button>
+  </div>
+  {% if related_tags %}
+  <div id="topic-links-list" class="subtopic-chips" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;">
+    {% for tag in related_tags %}
+    <span class="linked-chip-wrap">
+      <a href="{{ url_for('entity_detail', entity_id=tag.id) if tag.kind == 'entity' else url_for('topic_detail', topic_id=tag.id) }}" class="topic-chip topic-chip--link" style="--chip-color: {{ tag.color }}">{{ tag.name }}</a>
+      <button class="task-delete-btn" onclick="Topics.removeLink({{ tag.id }})" title="Remove">×</button>
+    </span>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-muted">No connections yet.</p>
+  {% endif %}
+</section>
+
+<!-- Entries / Tasks -->
+<section class="topic-section">
+  <div class="section-header">
+    <h2 class="topic-detail-tabs"><button class="filter-tab filter-tab--active" onclick="document.getElementById('topic-entries-tab').classList.remove('hidden');document.getElementById('topic-tasks-tab').classList.add('hidden');this.classList.add('filter-tab--active');this.nextElementSibling.classList.remove('filter-tab--active')">Entries ({{ entries|length }})</button><button class="filter-tab" onclick="document.getElementById('topic-entries-tab').classList.add('hidden');document.getElementById('topic-tasks-tab').classList.remove('hidden');this.classList.add('filter-tab--active');this.previousElementSibling.classList.remove('filter-tab--active')">Tasks ({{ topic_tasks|length }})</button></h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn-secondary" onclick="Topics.openAddNote()">Add note</button>
+      {% if archived_entries %}
+      <button class="btn-secondary" id="archived-toggle-btn" onclick="Topics.toggleArchived()">
+        View archived ({{ archived_entries|length }})
+      </button>
+      {% endif %}
+    </div>
+  </div>
+
+  <div id="topic-entries-tab">
+  <div id="active-entries">
+    {% for entry in entries %}
+    <div class="topic-entry">
+      <div class="topic-entry-header" onclick="Topics.toggleEntry({{ entry.id }})">
+        <span class="topic-entry-date">{{ entry.note_date }}</span>
+        <span class="topic-entry-toggle" id="toggle-{{ entry.id }}">▶</span>
+      </div>
+      <div class="topic-entry-content hidden" id="entry-{{ entry.id }}">{{ entry.content_html|safe }}</div>
+    </div>
+    {% else %}
+    <p class="text-muted">No entries yet.</p>
+    {% endfor %}
+  </div>
+
+  {% if archived_entries %}
+  <div id="archived-entries" class="hidden">
+    <p class="section-subheader">Archived entries</p>
+    {% for entry in archived_entries %}
+    <div class="topic-entry topic-entry--archived">
+      <div class="topic-entry-header" onclick="Topics.toggleEntry('a{{ entry.id }}')">
+        <span class="topic-entry-date">{{ entry.note_date }} <span class="text-muted"> · archived</span></span>
+        <span class="topic-entry-toggle" id="toggle-a{{ entry.id }}">▶</span>
+      </div>
+      <div class="topic-entry-content hidden" id="entry-a{{ entry.id }}">{{ entry.content_html|safe }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  </div>
+  <div id="topic-tasks-tab" class="hidden">
+    {% for task in topic_tasks %}
+    <div class="task-row" data-task-id="{{ task.id }}" data-status="{{ task.status }}">
+      <input type="checkbox" class="task-checkbox" {% if task.status == 'done' %}checked{% endif %} onchange="Tasks.toggleDone('{{ task.id }}', this.checked)" onclick="event.stopPropagation()">
+      <span class="task-row-main" onclick="Tasks.openDetail('{{ task.id }}')">
+        {% if task.emoji %}<span class="task-emoji">{{ task.emoji }}</span>{% endif %}
+        <span class="task-row-title {% if task.status == 'done' %}task-row-title--done{% endif %}">{{ task.title }}</span>
+      </span>
+      <span class="task-row-meta">
+        {% if task.due_at %}<span class="task-due {% if task.due_at[:10] < today %}task-due--overdue{% endif %}">{{ task.due_at[:10] }}</span>{% endif %}
+        <select class="task-status-select task-status--{{ task.status }}" onchange="Tasks.setStatus('{{ task.id }}', this.value)" onclick="event.stopPropagation()">
+          <option value="open" {% if task.status == 'open' %}selected{% endif %}>Open</option>
+          <option value="waiting" {% if task.status == 'waiting' %}selected{% endif %}>Waiting</option>
+          <option value="done" {% if task.status == 'done' %}selected{% endif %}>Done</option>
+          <option value="cancelled" {% if task.status == 'cancelled' %}selected{% endif %}>Cancelled</option>
+        </select>
+      </span>
+    </div>
+    {% else %}
+    <p class="text-muted">No related tasks.</p>
+    {% endfor %}
+  </div>
+</section>
+
+{% if session.get("is_admin") %}
+<!-- Decision Log -->
+<section class="topic-section">
+  <div class="section-header">
+    <h2>Decision Log {% if decision_items %}<span class="tasks-count">{{ decision_items|length }}</span>{% endif %}</h2>
+    <a href="{{ url_for('decisions_list') }}" class="btn-text" style="font-size:.8rem">All decisions →</a>
+  </div>
+  {% if decision_items %}
+    <div style="display:flex;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap">
+      <button class="btn-secondary" style="font-size:.8rem;padding:.2rem .6rem" onclick="TopicDecisions.filter('all',this)">All</button>
+      <button class="btn-secondary" style="font-size:.8rem;padding:.2rem .6rem" onclick="TopicDecisions.filter('decision',this)">Decisions</button>
+      <button class="btn-secondary" style="font-size:.8rem;padding:.2rem .6rem" onclick="TopicDecisions.filter('open_question',this)">Open Questions</button>
+      <button class="btn-secondary" style="font-size:.8rem;padding:.2rem .6rem" onclick="TopicDecisions.filter('revisit_later',this)">Revisit Later</button>
+    </div>
+    {% for item in decision_items %}
+    <div class="decision-row-compact" data-type="{{ item.item_type }}">
+      <span class="decision-type-badge-sm decision-type-badge-sm--{{ item.item_type }}">
+        {% if item.item_type == 'decision' %}D{% elif item.item_type == 'open_question' %}Q{% else %}R{% endif %}
+      </span>
+      <a href="{{ url_for('decisions_list') }}" class="decision-row-title">{{ item.title }}</a>
+      <span class="decision-row-status text-muted">{{ item.status }}</span>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="text-muted">No decision log items for this topic yet.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- Chat -->
+<section class="topic-section">
+  <div class="section-header">
+    <h2>Chat</h2>
+    <button class="btn-secondary" onclick="Topics.openChatModal()">Open Chat</button>
+  </div>
+  {% if chats %}
+  <div class="chat-list" id="chat-list">
+    {% for chat in chats %}
+    <div class="chat-list-item" onclick="Topics.openChatModal({{ chat.id }})">
+      <span>{{ chat.title }}</span>
+      <span class="text-muted">{{ chat.created_at[:10] }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<!-- Unified chat modal -->
+<div id="topic-chat-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--chat">
+    <div class="modal-chat-header">
+      <div class="modal-chat-scope">
+        <span class="topic-chip" style="--chip-color: {{ topic.color }}">{{ topic.name }}</span>
+      </div>
+      <button class="icon-btn" onclick="Topics.closeChatModal()">✕</button>
+    </div>
+    <div class="chat-window modal-chat-window" id="modal-chat-window">
+      <div class="chat-messages" id="modal-chat-messages"></div>
+    </div>
+    <div class="chat-save-actions">
+      <button class="btn-secondary" id="modal-save-summary-btn" onclick="Topics.saveChatSummary()">Save Summary</button>
+      <button class="btn-secondary" id="modal-save-transcript-btn" onclick="Topics.saveChatTranscript()">Save Transcript</button>
+    </div>
+    <form class="chat-form" id="modal-chat-form" autocomplete="off">
+      <textarea id="modal-chat-input" class="chat-input" placeholder="Ask about this topic…" rows="1"></textarea>
+      <button type="submit" class="chat-send" id="modal-chat-send">Send</button>
+    </form>
+  </div>
+</div>
+
+<!-- Merge modal -->
+<div id="merge-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Merge into another topic</h3>
+    <p class="text-muted">
+      This will delete <strong>{{ topic.name }}</strong> and move all its entries to the selected topic.
+      This cannot be undone.
+    </p>
+    {% if other_topics %}
+    <select id="merge-target-select" class="form-select">
+      {% for t in other_topics %}
+      <option value="{{ t.id }}">{{ t.name }}</option>
+      {% endfor %}
+    </select>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="Topics.closeMerge()">Cancel</button>
+      <button class="btn-danger" onclick="Topics.confirmMerge()">Merge</button>
+    </div>
+    {% else %}
+    <p class="text-muted">No other topics to merge into.</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="Topics.closeMerge()">Close</button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Set parent modal -->
+<div id="set-parent-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Set parent topic</h3>
+    {% if parent_candidates %}
+    <select id="parent-select" class="form-select">
+      <option value="">— None (root topic) —</option>
+      {% for t in parent_candidates %}
+      <option value="{{ t.id }}" {% if parent and parent.id == t.id %}selected{% endif %}>{{ t.name }}</option>
+      {% endfor %}
+    </select>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="Topics.closeSetParent()">Cancel</button>
+      <button class="btn-save" onclick="Topics.confirmSetParent()">Save</button>
+    </div>
+    {% else %}
+    <p class="text-muted">No other topics available.</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="Topics.closeSetParent()">Close</button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Create subtopic modal -->
+<div id="create-subtopic-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>New subtopic of {{ topic.name }}</h3>
+    <label class="modal-label" for="subtopic-name">Name</label>
+    <input type="text" id="subtopic-name" class="modal-input" placeholder="Subtopic name">
+    <label class="modal-label" for="subtopic-desc">Description <span class="text-muted">(optional)</span></label>
+    <textarea id="subtopic-desc" class="modal-textarea" rows="3" placeholder="Brief description…"></textarea>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn-secondary" onclick="Topics.closeCreateSubtopic()">Cancel</button>
+      <button class="btn-save" id="create-subtopic-submit" onclick="Topics.submitCreateSubtopic()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add note modal -->
+<div id="add-note-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide">
+    <h3>Add note</h3>
+    <label class="modal-label" for="note-date">Date</label>
+    <input type="date" id="note-date" class="modal-input" value="{{ today }}">
+    <label class="modal-label" for="note-content">Note <span class="text-muted">(markdown)</span></label>
+    <textarea id="note-content" class="modal-textarea modal-textarea--entry" placeholder="Write note in markdown…"></textarea>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn-secondary" onclick="Topics.closeAddNote()">Cancel</button>
+      <button class="btn-save" id="add-note-submit" onclick="Topics.submitNote()">Add note</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add link modal -->
+<div id="link-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Add connection</h3>
+    <label class="modal-label" for="link-target-select">Connect to</label>
+    <select id="link-target-select" class="form-select">
+      <optgroup label="Topics">
+        {% for t in all_tags if t.kind == 'topic' and t.id != topic.id %}
+        <option value="{{ t.id }}">{{ t.name }}</option>
+        {% endfor %}
+      </optgroup>
+      <optgroup label="Entities">
+        {% for t in all_tags if t.kind == 'entity' %}
+        <option value="{{ t.id }}">{{ t.name }}</option>
+        {% endfor %}
+      </optgroup>
+    </select>
+    <label class="modal-label" for="link-note">Note <span class="text-muted">(optional)</span>
+      <input id="link-note" type="text" class="modal-input" placeholder="How are they related?">
+    </label>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn-secondary" onclick="Topics.closeLinkModal()">Cancel</button>
+      <button class="btn-save" onclick="Topics.submitLink()">Add</button>
+    </div>
+  </div>
+</div>
+{% include "_task_detail_modal.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='chat.js') }}"></script>
+<script>window.TODAY = "{{ today }}"; window.TASK_ALL_TAGS = {{ all_tags | tojson }};</script>
+<script src="{{ url_for('static', filename='tasks.js') }}"></script>
+<script src="{{ url_for('static', filename='topics.js') }}"></script>
+<script>
+const TopicDecisions = (() => {
+  function filter(type) {
+    document.querySelectorAll('.decision-row-compact').forEach(el => {
+      el.style.display = (type === 'all' || el.dataset.type === type) ? '' : 'none';
+    });
+  }
+  return { filter };
+})();
+</script>
+<style>
+.decision-row-compact {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .35rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: .875rem;
+}
+.decision-row-compact:last-child { border-bottom: none; }
+.decision-type-badge-sm {
+  font-size: .65rem;
+  font-weight: 700;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.decision-type-badge-sm--decision { background: #dbeafe; color: #1d4ed8; }
+.decision-type-badge-sm--open_question { background: #fef9c3; color: #854d0e; }
+.decision-type-badge-sm--revisit_later { background: #ede9fe; color: #6d28d9; }
+.decision-row-title { flex: 1; color: var(--text); text-decoration: none; }
+.decision-row-title:hover { text-decoration: underline; }
+.decision-row-status { font-size: .75rem; }
+</style>
+{% endblock %}

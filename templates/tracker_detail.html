@@ -1,0 +1,1164 @@
+{% extends "base.html" %}
+{% block title %}{{ tracker.name }} — Trackers{% endblock %}
+
+{% block content %}
+<nav class="breadcrumbs">
+  <a href="{{ url_for('trackers_list') }}">Trackers</a>
+  <span>/</span>
+  <span>{{ tracker.name }}</span>
+</nav>
+
+{# Inject tracker hue for all components on this page #}
+<style>:root { --tracker-hue: {{ tracker_hue }}; }</style>
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title" style="margin-bottom:.3rem">{{ tracker.name }}</h1>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span class="t-cadence">{% if tracker.cadence == 'ad_hoc' %}As needed{% else %}{{ tracker.cadence|capitalize }}{% endif %}</span>
+      <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:0.4px">{{ fields|length }} field{{ 's' if fields|length != 1 }} · {{ rows|length }} {{ 'weeks' if tracker.cadence == 'weekly' else ('months' if tracker.cadence == 'monthly' else ('entries' if tracker.cadence == 'ad_hoc' else 'days')) }} logged</span>
+      {% for tag in tags %}
+      <span class="topic-chip" style="--chip-color:{{ tag.color }}">{{ tag.name }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+    <a href="{{ url_for('tracker_csv', tracker_id=tracker.id) }}" class="btn-secondary">Export</a>
+    <button class="btn-secondary" onclick="TrackerDetail.openEdit()">Edit</button>
+    <button class="btn-secondary" onclick="TrackerDetail.confirmArchive()">Archive</button>
+  </div>
+</div>
+
+{# ── Pull quote (computed by JS after data loads) ── #}
+<p class="pull-quote" id="tracker-pull-quote" style="min-height:2.2em">
+  {% if tracker.description %}<span class="em">{{ tracker.description }}</span>{% endif %}
+</p>
+
+{# ── Hero stats strip ── #}
+{% if fields %}
+<div class="tracker-hero-grid t-stagger" id="tracker-hero-grid">
+  {# rendered by JS #}
+</div>
+{% endif %}
+
+{# ── Open Questions (new design) ── #}
+{% if questions %}
+<div class="t-questions" id="t-questions-card">
+  <div class="t-questions-title">
+    <span class="t-questions-pulse"></span>
+    {{ questions|length }} small thing{{ 's' if questions|length != 1 }} I'm wondering about
+  </div>
+  {% for q in questions %}
+  <div class="t-q-row" id="tq-{{ q.id }}"
+       data-question-id="{{ q.id }}"
+       data-row-id="{{ q.row_id or '' }}"
+       data-field-id="{{ q.field_id or '' }}"
+       style="animation:t-fade-up .35s both;animation-delay:{{ loop.index0 * 60 }}ms">
+    <div class="t-q-text">
+      {{ q.question }}
+      {% if q.reason %}
+      <div class="t-q-reason">{{ q.reason }}</div>
+      {% endif %}
+    </div>
+    <div class="t-q-actions">
+      {# Render answer controls based on field type #}
+      {% set field = fields | selectattr('id', 'equalto', q.field_id) | first %}
+      {% if field and field.field_type == 'boolean' %}
+      <div class="t-q-yn">
+        <button onclick="TrackerDetail.answerQuestion('{{ q.id }}', true)">Yes</button>
+        <button onclick="TrackerDetail.answerQuestion('{{ q.id }}', false)">No</button>
+      </div>
+      {% else %}
+      <button class="btn-secondary" style="font-size:.8rem;padding:.2rem .6rem" onclick="TrackerDetail.openAnswerQuestion('{{ q.id }}')">Answer</button>
+      {% endif %}
+      <button class="t-q-skip" onclick="TrackerDetail.dismissQuestion('{{ q.id }}')">Skip</button>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ── Today's log strip ── #}
+{% if today_row and fields %}
+<div class="t-log-strip">
+  <div class="t-log-head">
+    <div class="t-log-title">
+      <span class="em">{{ 'Today' if tracker.cadence == 'daily' else 'This week' }}</span>
+    </div>
+    <div class="t-log-date" id="t-log-date"></div>
+  </div>
+  <div class="t-log-fields" id="t-log-fields">
+    {% for f in fields %}
+    {% set val_obj = today_values.get(f.id) %}
+    {% set raw_val = val_obj.value_json if val_obj else None %}
+    <div class="t-log-field"
+         data-field-id="{{ f.id }}"
+         data-field-type="{{ f.field_type }}"
+         data-row-id="{{ today_row.id }}"
+         data-current="{{ raw_val or '' }}"
+         data-options="{{ f.options_json or '[]' }}"
+         data-min="{{ f.min_value or '' }}"
+         data-max="{{ f.max_value or '' }}"
+         data-unit="{{ f.unit or '' }}">
+      <div class="t-log-label">
+        {{ f.name }}
+        {% if f.ai_explanation %}
+        <span class="t-log-auto">auto</span>
+        {% endif %}
+      </div>
+      <div class="t-log-input-wrap" id="t-log-input-{{ f.id }}">
+        {# Rendered by JS #}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# ── View tabs ── #}
+{% if fields %}
+<div class="t-tabs" id="tracker-view-tabs">
+  <button class="t-tab active" onclick="TrackerDetail.setView('7',this)">Last 7 Days</button>
+  <button class="t-tab" onclick="TrackerDetail.setView('30',this)">Last 30 Days</button>
+  <button class="t-tab" onclick="TrackerDetail.setView('all',this)">Calendar</button>
+  <button class="t-tab" onclick="TrackerDetail.setView('table',this)">Table</button>
+</div>
+
+<div id="view-7">
+  <div id="viz-7"></div>
+</div>
+<div id="view-30" class="hidden">
+  <div id="viz-30"></div>
+</div>
+<div id="view-all" class="hidden">
+  <div id="viz-all"></div>
+</div>
+<div id="view-table" class="hidden">
+  <div id="viz-table"></div>
+</div>
+{% else %}
+<p class="text-muted" style="margin-top:1rem">No fields yet. Add fields below to start tracking data.</p>
+{% endif %}
+
+{# ── Fields section (collapsible) ── #}
+<details class="t-fields-section" style="margin-top:28px">
+  <summary class="t-fields-toggle">
+    Fields ({{ fields|length }})
+    <button class="btn-secondary" style="font-size:.8rem;padding:.2rem .6rem;margin-left:.5rem"
+            onclick="event.preventDefault();TrackerDetail.openAddField()">+ Add field</button>
+  </summary>
+  <div class="t-fields-list">
+    {% if fields %}
+    {% for f in fields %}
+    <div class="t-field-row">
+      <span class="t-field-row-name">{{ f.name }}</span>
+      <span class="t-field-type-badge">
+        {% if f.field_type == 'boolean' %}Yes / No{% elif f.field_type == 'scale' %}Rating scale{% elif f.field_type == 'time' %}Time of day{% elif f.field_type == 'duration' %}Duration{% elif f.field_type == 'select' %}One choice{% elif f.field_type == 'multi_select' %}Multiple choices{% elif f.field_type == 'text' %}Short text{% else %}Number{% endif %}
+      </span>
+      {% if f.unit %}<span style="font-family:var(--mono);font-size:10px;color:var(--ink-3)">{{ f.unit }}</span>{% endif %}
+      {% if f.required %}<span class="t-field-required">required</span>{% endif %}
+      {% if f.linked_task_id %}<span class="t-field-required">task-linked</span>{% endif %}
+      {% if f.ai_explanation %}<span style="font-family:var(--sans);font-size:11px;color:var(--ink-3);flex:1">{{ f.ai_explanation }}</span>{% endif %}
+      <button class="btn-text" style="font-size:.75rem;color:var(--danger);margin-left:auto"
+              onclick="TrackerDetail.deleteField('{{ f.id }}','{{ f.name }}')">Remove</button>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="text-muted" style="font-size:.875rem">No fields yet. Add fields to start tracking.</p>
+    {% endif %}
+  </div>
+</details>
+
+{# ── Edit Tracker Modal ── #}
+<div id="tracker-edit-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Edit Tracker</h3>
+    <label class="modal-label">Name
+      <input type="text" id="te-name" class="modal-input" value="{{ tracker.name }}">
+    </label>
+    <label class="modal-label">Description
+      <input type="text" id="te-description" class="modal-input" value="{{ tracker.description or '' }}">
+    </label>
+    <label class="modal-label">Cadence
+      <select id="te-cadence" class="modal-input">
+        <option value="daily" {% if tracker.cadence == 'daily' %}selected{% endif %}>Daily</option>
+        <option value="weekly" {% if tracker.cadence == 'weekly' %}selected{% endif %}>Weekly</option>
+        <option value="monthly" {% if tracker.cadence == 'monthly' %}selected{% endif %}>Monthly</option>
+        <option value="ad_hoc" {% if tracker.cadence == 'ad_hoc' %}selected{% endif %}>As needed</option>
+      </select>
+    </label>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="TrackerDetail.closeEdit()">Cancel</button>
+      <button class="btn-save" onclick="TrackerDetail.saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+{# ── Add Field Modal ── #}
+<div id="tracker-add-field-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Add Field</h3>
+    <label class="modal-label">Name *
+      <input type="text" id="af-name" class="modal-input" placeholder="e.g. Morning prayers" autocomplete="off"
+             oninput="TrackerDetail.autoSlug(this.value)">
+    </label>
+    <label class="modal-label">Internal name *
+      <input type="text" id="af-key" class="modal-input" placeholder="Auto-filled from the field name" autocomplete="off">
+    </label>
+    <label class="modal-label">Type
+      <select id="af-type" class="modal-input" onchange="TrackerDetail.onFieldTypeChange(this.value)">
+        <option value="boolean">Yes / No</option>
+        <option value="number">Number</option>
+        <option value="text">Short text</option>
+        <option value="scale">Rating scale</option>
+        <option value="time">Time of day</option>
+        <option value="duration">Duration</option>
+        <option value="select">One choice</option>
+        <option value="multi_select">Multiple choices</option>
+      </select>
+    </label>
+    <label class="modal-label" id="af-unit-wrap">Unit
+      <input type="text" id="af-unit" class="modal-input" placeholder="e.g. oz, hours, sessions">
+    </label>
+    <label class="modal-label" id="af-scale-wrap" style="display:none">Scale range
+      <div class="tracker-scale-range">
+        <input type="number" id="af-min" class="modal-input" placeholder="Min" value="1" style="width:6rem">
+        <input type="number" id="af-max" class="modal-input" placeholder="Max" value="10" style="width:6rem">
+      </div>
+    </label>
+    <label class="modal-label" id="af-options-wrap" style="display:none">Options (comma-separated)
+      <input type="text" id="af-options" class="modal-input" placeholder="e.g. headache, fatigue, nausea">
+    </label>
+    <label class="modal-label">AI prompt
+      <textarea id="af-ai-explanation" class="modal-textarea" rows="3"
+        placeholder="When should the AI infer this value, and when should it ask me?"></textarea>
+    </label>
+    <label class="modal-label">Existing recurring task
+      <select id="af-linked-task" class="modal-input">
+        <option value="">None</option>
+        {% for task in recurring_tasks %}
+        <option value="{{ task.id }}">{{ task.title }} ({{ task.recurrence_rule }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+      <label class="modal-label">New recurring task
+        <input type="text" id="af-new-task-title" class="modal-input" placeholder="Task title">
+      </label>
+      <label class="modal-label">Repeats
+        <input type="text" id="af-new-task-rule" class="modal-input" placeholder="daily, every Monday...">
+      </label>
+    </div>
+    <label class="modal-label modal-label--checkbox">
+      <input type="checkbox" id="af-required"> Required
+    </label>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="TrackerDetail.closeAddField()">Cancel</button>
+      <button class="btn-save" onclick="TrackerDetail.saveAddField()">Add</button>
+    </div>
+  </div>
+</div>
+
+{# ── Add Row Modal ── #}
+<div id="tracker-add-row-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Add Row</h3>
+    <label class="modal-label">Date *
+      <input type="date" id="ar-date" class="modal-input">
+    </label>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="TrackerDetail.closeAddRow()">Cancel</button>
+      <button class="btn-save" onclick="TrackerDetail.saveAddRow()">Add</button>
+    </div>
+  </div>
+</div>
+
+{# ── Answer Question Modal (for non-boolean) ── #}
+<div id="tracker-answer-question-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Answer Question</h3>
+    <p id="tq-question-text" class="text-muted" style="margin-bottom:1rem"></p>
+    <label class="modal-label">Answer
+      <div id="tq-answer-input-wrap"></div>
+    </label>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="TrackerDetail.closeAnswerQuestion()">Cancel</button>
+      <button class="btn-save" onclick="TrackerDetail.saveAnswerQuestion()">Save</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.TRACKER_FIELDS  = {{ fields  | tojson }};
+window.TRACKER_ROWS    = {{ rows    | tojson }};
+window.TRACKER_VALUES  = {{ values_map | tojson }};
+window.RECURRING_TASKS = {{ recurring_tasks | tojson }};
+
+const TRACKER_ID      = '{{ tracker.id }}';
+const TRACKER_CADENCE = '{{ tracker.cadence }}';
+const TRACKER_TODAY   = '{{ current_date }}';
+const TRACKER_HUE     = '{{ tracker_hue }}';
+const TODAY_ROW_ID    = '{{ today_row.id if today_row else "" }}';
+
+// ── Data helpers ──────────────────────────────────────────────
+function _parseVal(valueJson) {
+  if (valueJson === null || valueJson === undefined) return null;
+  try { return JSON.parse(valueJson); } catch { return null; }
+}
+function _displayVal(valueJson, fieldType) {
+  const v = _parseVal(valueJson);
+  if (v === null) return '—';
+  if (fieldType === 'boolean') return v ? 'Yes' : 'No';
+  if (Array.isArray(v)) return v.join(', ');
+  return String(v);
+}
+function _esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function _fmtDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function _parseDate(s) { const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d); }
+function _dayInitial(iso) { return ['S','M','T','W','T','F','S'][_parseDate(iso).getDay()]; }
+function _shortDate(iso) {
+  const d = _parseDate(iso);
+  return `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]} ${d.getDate()}`;
+}
+
+function _rowsByDate() {
+  const map = {};
+  for (const row of (window.TRACKER_ROWS || [])) {
+    const vals = window.TRACKER_VALUES?.[row.id] || {};
+    map[row.period_start] = { _status: row.status, _row_id: row.id, ...vals };
+  }
+  return map;
+}
+
+function _lastNDates(n) {
+  const today = _parseDate(TRACKER_TODAY);
+  const dates = [];
+  for (let i = n-1; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+    dates.push(_fmtDate(d));
+  }
+  return dates;
+}
+
+// Compute streak for boolean field (consecutive trues/falses from end)
+function _fieldStreak(fieldId, desired) {
+  const rows = [...(window.TRACKER_ROWS || [])].sort((a,b) => b.period_start.localeCompare(a.period_start));
+  let streak = 0;
+  for (const row of rows) {
+    const vals = window.TRACKER_VALUES?.[row.id] || {};
+    const valObj = vals[fieldId];
+    if (!valObj) break;
+    const v = _parseVal(valObj.value_json);
+    if (v !== desired) break;
+    streak++;
+  }
+  return streak;
+}
+
+function _fieldCount(fieldId, desired, n) {
+  const rows = (window.TRACKER_ROWS || []).slice(0, n);
+  return rows.filter(r => {
+    const vals = window.TRACKER_VALUES?.[r.id] || {};
+    return _parseVal(vals[fieldId]?.value_json) === desired;
+  }).length;
+}
+
+function _trendAvg(fieldId, n) {
+  const rows = (window.TRACKER_ROWS || []).slice(0, n);
+  const vals = rows.map(r => {
+    const v = _parseVal((window.TRACKER_VALUES?.[r.id] || {})[fieldId]?.value_json);
+    return typeof v === 'number' ? v : null;
+  }).filter(v => v !== null);
+  return vals.length ? vals.reduce((a,b) => a+b,0) / vals.length : null;
+}
+
+function _trendDelta(fieldId, n) {
+  const cur = _trendAvg(fieldId, n);
+  const rows = window.TRACKER_ROWS || [];
+  const prevRows = rows.slice(n, n*2);
+  const prevVals = prevRows.map(r => {
+    const v = _parseVal((window.TRACKER_VALUES?.[r.id] || {})[fieldId]?.value_json);
+    return typeof v === 'number' ? v : null;
+  }).filter(v => v !== null);
+  const prev = prevVals.length ? prevVals.reduce((a,b) => a+b,0) / prevVals.length : null;
+  const pct = (cur !== null && prev !== null && prev > 0) ? ((cur - prev) / prev) * 100 : null;
+  return { cur, prev, pct };
+}
+
+// ── Delta pill ────────────────────────────────────────────────
+function _deltaPill(pct, positiveIsUp = true) {
+  if (pct === null || isNaN(pct)) return `<span class="t-delta t-delta--flat">→ —</span>`;
+  const abs = Math.abs(pct);
+  const isUp = pct > 0;
+  let cls = abs < 1 ? 't-delta--flat' : ((isUp && positiveIsUp) || (!isUp && !positiveIsUp)) ? 't-delta--up' : 't-delta--down';
+  const arrow = abs < 1 ? '→' : isUp ? '↑' : '↓';
+  const sign = isUp ? '+' : '';
+  return `<span class="t-delta ${cls}">${arrow} ${sign}${pct.toFixed(abs < 10 ? 1 : 0)}%</span>`;
+}
+
+// ── Pull quote computation ─────────────────────────────────────
+function _computePullQuote() {
+  const fields = window.TRACKER_FIELDS || [];
+  const rows = window.TRACKER_ROWS || [];
+  if (!rows.length || !fields.length) return null;
+
+  const boolFields = fields.filter(f => f.field_type === 'boolean');
+  const numFields = fields.filter(f => ['number','scale'].includes(f.field_type));
+  const recentRows = rows.slice(0, 7);
+
+  // Check for numeric trends
+  for (const f of numFields) {
+    const delta = _trendDelta(f.id, 7);
+    if (delta.cur !== null) {
+      const pctTxt = delta.pct !== null ? ` (${delta.pct > 0 ? '+' : ''}${delta.pct.toFixed(0)}% vs prior week)` : '';
+      return [`${_shortDate(rows[0].period_start)} — ${f.name}: ${delta.cur.toFixed(1)}${f.unit ? ' '+f.unit : ''}`, pctTxt.trim()];
+    }
+  }
+
+  // Boolean summary
+  for (const f of boolFields) {
+    const streak = _fieldStreak(f.id, f.positive === false ? false : true);
+    if (streak >= 3) {
+      const desired = f.positive === false ? false : true;
+      const label = f.positive === false ? `${streak} days ${f.name.toLowerCase()}-free` : `${streak}-day ${f.name.toLowerCase()} streak`;
+      return [label + '.', 'Keep it going.'];
+    }
+  }
+
+  // Default: recent week summary
+  const totalLogged = recentRows.filter(r => Object.keys(window.TRACKER_VALUES?.[r.id] || {}).length > 0).length;
+  if (totalLogged > 0) return [`${totalLogged} of 7 days logged.`, 'A steady week.'];
+  return null;
+}
+
+// ── Hero stats computation ─────────────────────────────────────
+function _computeHero() {
+  const fields = window.TRACKER_FIELDS || [];
+  const rows = window.TRACKER_ROWS || [];
+  if (!fields.length || !rows.length) return [];
+
+  const boolFields = fields.filter(f => f.field_type === 'boolean');
+  const numFields = fields.filter(f => ['number','scale'].includes(f.field_type));
+  const cells = [];
+
+  if (boolFields.length >= 1) {
+    const f = boolFields[0];
+    const desired = f.positive === false ? false : true;
+    const streak = _fieldStreak(f.id, desired);
+    const count30 = desired ? _fieldCount(f.id, true, 30) : 30 - _fieldCount(f.id, true, 30);
+    cells.push({ label: f.name, value: streak, denom: 'day streak', milestone: [3,7,14,30,60,100].includes(streak), sub: `${count30} of last 30 days` });
+  }
+  if (numFields.length >= 1) {
+    const f = numFields[0];
+    const delta = _trendDelta(f.id, 7);
+    cells.push({ label: `${f.name} · 7d avg`, value: delta.cur !== null ? delta.cur.toFixed(f.unit === 'hr' ? 1 : 0) : '—', unit: f.unit || '', deltaPct: delta.pct, sub: 'vs prior week' });
+  }
+  if (numFields.length >= 2) {
+    const f = numFields[1];
+    const delta = _trendDelta(f.id, 7);
+    cells.push({ label: `${f.name} · 7d avg`, value: delta.cur !== null ? delta.cur.toFixed(1) : '—', unit: f.unit || '', deltaPct: delta.pct, sub: 'vs prior week' });
+  } else if (boolFields.length >= 2) {
+    const f = boolFields[1];
+    const desired = f.positive === false ? false : true;
+    const streak = _fieldStreak(f.id, desired);
+    cells.push({ label: f.name, value: streak, denom: 'day streak', milestone: [3,7,14,30,60,100].includes(streak), sub: `current` });
+  }
+  if (cells.length < 3 && rows.length > 0) {
+    const totalLogged = rows.filter(r => Object.keys(window.TRACKER_VALUES?.[r.id] || {}).length > 0).length;
+    cells.push({ label: 'Total logged', value: totalLogged, denom: `/ ${rows.length}`, sub: 'all time' });
+  }
+  return cells.slice(0, 3);
+}
+
+// ── Render hero grid ──────────────────────────────────────────
+function _renderHero() {
+  const grid = document.getElementById('tracker-hero-grid');
+  if (!grid) return;
+  const cells = _computeHero();
+  if (!cells.length) { grid.style.display = 'none'; return; }
+  grid.innerHTML = cells.map(c => `
+    <div class="tracker-hero-cell">
+      <div class="tracker-hero-label">${_esc(c.label)}</div>
+      <div class="tracker-hero-value${c.milestone ? ' tracker-hero-value--milestone' : ''}">
+        <span>${_esc(String(c.value))}</span>
+        ${c.unit ? `<span class="unit">${_esc(c.unit)}</span>` : ''}
+        ${c.denom ? `<span class="denom">${_esc(c.denom)}</span>` : ''}
+      </div>
+      <div class="tracker-hero-sub">
+        ${c.deltaPct !== undefined && c.deltaPct !== null ? _deltaPill(c.deltaPct) : ''}
+        <span>${_esc(c.sub || '')}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── Render pull quote ─────────────────────────────────────────
+function _renderPullQuote() {
+  const el = document.getElementById('tracker-pull-quote');
+  if (!el) return;
+  const result = _computePullQuote();
+  if (result) {
+    el.innerHTML = `<span class="em">${_esc(result[0])}</span>${result[1] ? ' ' + _esc(result[1]) : ''}`;
+  }
+}
+
+// ── Render today's log strip ──────────────────────────────────
+function _renderLogDate() {
+  const el = document.getElementById('t-log-date');
+  if (!el) return;
+  const d = _parseDate(TRACKER_TODAY);
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  el.textContent = `${_shortDate(TRACKER_TODAY)} · ${days[d.getDay()]}`;
+}
+
+function _renderLogInputs() {
+  document.querySelectorAll('.t-log-field').forEach(row => {
+    const fieldId = row.dataset.fieldId;
+    const fieldType = row.dataset.fieldType;
+    const currentRaw = row.dataset.current || '';
+    const container = document.getElementById(`t-log-input-${fieldId}`);
+    if (!container) return;
+    let currentVal = null;
+    try { currentVal = currentRaw ? JSON.parse(currentRaw) : null; } catch {}
+    container.innerHTML = _buildLogInput(fieldId, fieldType, currentVal, row.dataset);
+    _attachLogInputListeners(fieldId, fieldType, row.dataset.rowId, container);
+  });
+}
+
+function _buildLogInput(fieldId, fieldType, currentVal, dataset) {
+  if (fieldType === 'boolean') {
+    const isYes = currentVal === true;
+    const isNo = currentVal === false;
+    return `<div class="t-log-toggle">
+      <button id="t-yn-yes-${fieldId}" onclick="TodayLog.toggle('${fieldId}',true)" class="${isYes ? 'chosen-yes' : ''}">Yes</button>
+      <button id="t-yn-no-${fieldId}" onclick="TodayLog.toggle('${fieldId}',false)" class="${isNo ? 'chosen-no' : ''}">No</button>
+    </div>`;
+  }
+  if (fieldType === 'scale') {
+    const min = parseInt(dataset.min) || 1;
+    const max = parseInt(dataset.max) || 10;
+    const buttons = [];
+    for (let v = min; v <= max; v++) {
+      buttons.push(`<button onclick="TodayLog.scale('${fieldId}',${v})" class="${currentVal === v ? 'chosen' : ''}">${v}</button>`);
+    }
+    return `<div class="t-log-scale" id="t-scale-${fieldId}">${buttons.join('')}</div>`;
+  }
+  if (fieldType === 'number') {
+    const unit = dataset.unit || '';
+    return `<div style="display:flex;align-items:center;gap:6px">
+      <input class="t-log-num" type="number" step="0.1" id="t-num-${fieldId}"
+        value="${currentVal !== null ? currentVal : ''}" placeholder="—"
+        onchange="TodayLog.num('${fieldId}',this.value)"
+        onkeydown="if(event.key==='Enter')TodayLog.num('${fieldId}',this.value)">
+      ${unit ? `<span style="font-family:var(--mono);font-size:11px;color:var(--ink-3)">${_esc(unit)}</span>` : ''}
+    </div>`;
+  }
+  if (fieldType === 'time') {
+    return `<input class="t-log-num" type="time" style="width:110px" id="t-time-${fieldId}"
+      value="${currentVal || ''}"
+      onchange="TodayLog.num('${fieldId}',this.value)">`;
+  }
+  if (fieldType === 'multi_select') {
+    let options = [];
+    try { options = JSON.parse(dataset.options || '[]'); } catch {}
+    const selected = Array.isArray(currentVal) ? currentVal : [];
+    const buttons = options.map(o =>
+      `<button onclick="TodayLog.multiSel('${fieldId}','${_esc(o)}')" class="${selected.includes(o) ? 'chosen' : ''}">${_esc(o)}</button>`
+    ).join('');
+    return `<div class="t-log-multisel" id="t-multi-${fieldId}">${buttons}</div>`;
+  }
+  return `<input class="t-log-num" type="text" id="t-text-${fieldId}"
+    value="${currentVal !== null ? _esc(String(currentVal)) : ''}" placeholder="—"
+    onchange="TodayLog.num('${fieldId}',this.value)">`;
+}
+
+function _attachLogInputListeners() { /* event handlers set inline above */ }
+
+// Global for today's field values (persists across saves)
+const _todayValues = {};
+(function initTodayValues() {
+  document.querySelectorAll('.t-log-field').forEach(row => {
+    try { _todayValues[row.dataset.fieldId] = row.dataset.current ? JSON.parse(row.dataset.current) : null; }
+    catch { _todayValues[row.dataset.fieldId] = null; }
+  });
+})();
+
+const TodayLog = {
+  async _save(fieldId, value) {
+    if (!TODAY_ROW_ID) return;
+    _todayValues[fieldId] = value;
+    // Show saved indicator
+    const container = document.getElementById(`t-log-input-${fieldId}`);
+    const saved = document.createElement('span');
+    saved.className = 't-log-saved';
+    saved.textContent = 'saved';
+    container.prepend(saved);
+    setTimeout(() => saved.remove(), 1100);
+    try {
+      await fetch(`/api/trackers/${TRACKER_ID}/rows/${TODAY_ROW_ID}`, {
+        method: 'PATCH', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ [fieldId]: value }),
+      });
+    } catch {}
+  },
+  toggle(fieldId, value) {
+    const yesBtn = document.getElementById(`t-yn-yes-${fieldId}`);
+    const noBtn  = document.getElementById(`t-yn-no-${fieldId}`);
+    if (yesBtn) yesBtn.className = value === true  ? 'chosen-yes' : '';
+    if (noBtn)  noBtn.className  = value === false ? 'chosen-no'  : '';
+    this._save(fieldId, value);
+  },
+  scale(fieldId, value) {
+    const container = document.getElementById(`t-scale-${fieldId}`);
+    if (container) container.querySelectorAll('button').forEach((b, i) => {
+      b.className = (i + (parseInt(document.querySelector(`[data-field-id="${fieldId}"]`)?.dataset.min) || 1)) === value ? 'chosen' : '';
+    });
+    this._save(fieldId, value);
+  },
+  num(fieldId, rawValue) {
+    const row = document.querySelector(`.t-log-field[data-field-id="${fieldId}"]`);
+    const fieldType = row?.dataset.fieldType;
+    let value = rawValue;
+    if (['number','scale','duration'].includes(fieldType)) value = rawValue !== '' ? parseFloat(rawValue) : null;
+    if (value !== null) this._save(fieldId, value);
+  },
+  multiSel(fieldId, option) {
+    let arr = Array.isArray(_todayValues[fieldId]) ? [..._todayValues[fieldId]] : [];
+    if (arr.includes(option)) arr = arr.filter(x => x !== option);
+    else arr.push(option);
+    _todayValues[fieldId] = arr;
+    const container = document.getElementById(`t-multi-${fieldId}`);
+    if (container) container.querySelectorAll('button').forEach(b => {
+      b.className = arr.includes(b.textContent.trim()) ? 'chosen' : '';
+    });
+    this._save(fieldId, arr);
+  },
+};
+
+// ── Heatgrid builder ──────────────────────────────────────────
+function _buildHeatgrid(rowMap, weeks, fieldId, mini, big) {
+  const field = fieldId ? (window.TRACKER_FIELDS || []).find(f => f.id === fieldId) : null;
+  const today = _parseDate(TRACKER_TODAY);
+  const todayDow = today.getDay();
+  const lastColEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate() + (6 - todayDow));
+  const totalDays = weeks * 7;
+  const startDate = new Date(lastColEnd.getFullYear(), lastColEnd.getMonth(), lastColEnd.getDate() - totalDays + 1);
+
+  function intensity(row) {
+    if (!row) return null;
+    if (field) {
+      const v = _parseVal(row[field.id]?.value_json);
+      if (v === null || v === undefined) return null;
+      if (field.field_type === 'boolean') return (field.positive === false ? !v : v) ? 1 : 0;
+      const target = field.max_value || (field.unit === 'hr' ? 8 : 100);
+      return Math.max(0.15, Math.min(1, v / target));
+    }
+    // Overall: any values logged?
+    const keys = Object.keys(row).filter(k => !k.startsWith('_'));
+    return keys.length > 0 ? 1 : null;
+  }
+
+  let monthLabels = '', gridCells = '';
+  let lastMonth = -1;
+  for (let i = 0; i < totalDays; i++) {
+    const d = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i);
+    const iso = _fmtDate(d);
+    const isFuture = d > today;
+    const row = rowMap[iso];
+    const v = intensity(row);
+    const isToday = iso === TRACKER_TODAY;
+    let cls = 't-heatcell';
+    if (isFuture) cls += ' t-heatcell--empty';
+    else if (v === null) cls += ' t-heatcell--empty';
+    else if (v === 0) cls += ' t-heatcell--empty';
+    else { cls += ' t-heatcell--filled'; }
+    if (isToday) cls += ' t-heatcell--today';
+    const style = (v !== null && v > 0 && !isFuture) ? `style="--cell-int:${v}"` : '';
+    gridCells += `<div class="${cls}" ${style} title="${iso}"></div>`;
+    if (d.getDay() === 0 && d.getMonth() !== lastMonth && !mini) {
+      const col = Math.floor(i / 7);
+      const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      monthLabels += `<span class="t-month-label" style="left:${col*(big?25:16)}px">${monthNames[d.getMonth()]}</span>`;
+      lastMonth = d.getMonth();
+    }
+  }
+
+  const gridCls = `t-heatgrid${mini ? ' t-heatgrid--mini' : ''}${big ? ' t-heatgrid--big' : ''}`;
+  const gridStyle = `grid-template-columns:repeat(${weeks},auto)`;
+
+  if (mini) return `<div class="${gridCls}" style="${gridStyle}">${gridCells}</div>`;
+
+  return `<div class="t-heatgrid-row">
+    <div class="t-weekday-labels"><span></span><span>M</span><span></span><span>W</span><span></span><span>F</span><span></span></div>
+    <div>
+      <div class="t-month-labels" style="position:relative;height:14px">${monthLabels}</div>
+      <div class="${gridCls}" style="${gridStyle}">${gridCells}</div>
+    </div>
+  </div>`;
+}
+
+// ── Dot row (boolean) ─────────────────────────────────────────
+function _buildDotRow(rowMap, fieldId, days) {
+  const field = (window.TRACKER_FIELDS || []).find(f => f.id === fieldId);
+  const dates = _lastNDates(days);
+  let cells = '';
+  dates.forEach((iso, i) => {
+    const row = rowMap[iso];
+    const v = _parseVal(row?.[fieldId]?.value_json);
+    const isToday = iso === TRACKER_TODAY;
+    let cls = 't-dot';
+    let glyph = '?';
+    if (v === null || v === undefined) { cls += ' t-dot--empty'; }
+    else if (field?.positive === false) {
+      if (v) { cls += ' t-dot--no'; glyph = '✕'; } else { cls += ' t-dot--filled'; glyph = '·'; }
+    } else {
+      if (v) { cls += ' t-dot--filled'; glyph = '✓'; } else { cls += ' t-dot--no'; glyph = '·'; }
+    }
+    if (isToday) cls += ' t-dot--today';
+    cells += `<div class="${cls}" style="animation-delay:${i*20}ms" title="${iso}">
+      <span style="font-size:13px;line-height:1">${glyph}</span>
+      <span style="font-size:8px;opacity:.75">${_dayInitial(iso)}</span>
+    </div>`;
+  });
+  return `<div class="t-dotrow t-stagger" style="--cols:${days}">${cells}</div>`;
+}
+
+// ── Bar row (numeric) ─────────────────────────────────────────
+function _buildBarRow(rowMap, fieldId, days) {
+  const field = (window.TRACKER_FIELDS || []).find(f => f.id === fieldId);
+  const dates = _lastNDates(days);
+  const values = dates.map(iso => {
+    const row = rowMap[iso];
+    return { iso, v: _parseVal(row?.[fieldId]?.value_json) };
+  });
+  const nums = values.map(x => x.v).filter(v => typeof v === 'number');
+  const target = field?.max_value || (nums.length ? null : 1);
+  const maxVal = Math.max(target || 0, ...nums, 1);
+  let cols = '';
+  values.forEach(({iso, v}, i) => {
+    const has = typeof v === 'number';
+    const pct = has ? Math.max(3, (v / maxVal) * 100) : 0;
+    cols += `<div class="t-bar-col" title="${iso}: ${has ? v : '—'}">
+      <div class="t-bar" style="height:${has ? pct+'%' : '3px'};animation-delay:${i*22}ms"></div>
+      <div class="t-bar-cap">${_dayInitial(iso)}</div>
+    </div>`;
+  });
+  return `<div class="t-barrow t-grow-bars" style="--cols:${days}">${cols}</div>`;
+}
+
+// ── Multi-select bar ──────────────────────────────────────────
+function _buildMultiBar(rowMap, field, days) {
+  let options = [];
+  try { options = JSON.parse(field.options_json || '[]'); } catch {}
+  const dates = _lastNDates(days);
+  const counts = {};
+  options.forEach(o => counts[o] = 0);
+  dates.forEach(iso => {
+    const row = rowMap[iso];
+    const v = _parseVal(row?.[field.id]?.value_json);
+    if (Array.isArray(v)) v.forEach(o => { counts[o] = (counts[o] || 0) + 1; });
+  });
+  const maxCount = Math.max(...Object.values(counts), 1);
+  return `<div class="t-multibar">${options.map(o => `
+    <div class="t-multibar-row">
+      <span class="t-multibar-label">${_esc(o)}</span>
+      <div class="t-multibar-track"><div class="t-multibar-fill" style="width:${(counts[o]/maxCount)*100}%"></div></div>
+      <span class="t-multibar-count">${counts[o]}</span>
+    </div>`).join('')}</div>`;
+}
+
+// ── Time scatter ──────────────────────────────────────────────
+function _buildTimeGraph(rowMap, field, days) {
+  const dates = _lastNDates(days);
+  const minMins = 5 * 60, maxMins = 9 * 60, range = maxMins - minMins;
+  const points = [];
+  let sumMins = 0, countMins = 0;
+  dates.forEach((iso, i) => {
+    const row = rowMap[iso];
+    const t = _parseVal(row?.[field.id]?.value_json);
+    if (!t || typeof t !== 'string') return;
+    const [h, m] = t.split(':').map(Number);
+    const mins = h * 60 + m;
+    const yPct = Math.max(0, Math.min(1, (mins - minMins) / range)) * 100;
+    const xPct = (i / (dates.length - 1)) * 100;
+    points.push({ xPct, yPct, t, iso });
+    sumMins += mins; countMins++;
+  });
+  const avgMins = countMins > 0 ? sumMins / countMins : null;
+  const avgYPct = avgMins !== null ? Math.max(0, Math.min(1, (avgMins - minMins) / range)) * 100 : null;
+  const avgStr = avgMins !== null ? `${String(Math.floor(avgMins/60)).padStart(2,'0')}:${String(Math.round(avgMins%60)).padStart(2,'0')}` : null;
+
+  const dots = points.map(p =>
+    `<div class="t-timegraph-point" style="left:${p.xPct}%;top:${p.yPct}%" title="${p.iso} · ${p.t}"></div>`
+  ).join('');
+  const avgLine = avgYPct !== null ? `
+    <div class="t-timegraph-avgline" style="top:${avgYPct}%">
+      <span class="t-timegraph-avglabel">avg ${avgStr}</span>
+    </div>` : '';
+
+  return `<div class="t-timegraph" style="margin-left:40px">
+    <span class="t-timegraph-axislabel" style="top:4px">5:00</span>
+    <span class="t-timegraph-axislabel" style="bottom:4px">9:00</span>
+    ${dots}${avgLine}
+  </div>`;
+}
+
+// ── Field block ───────────────────────────────────────────────
+function _buildFieldBlock(field, rowMap, days, idx) {
+  let summary = '';
+  let vis = '';
+  const ft = field.field_type;
+
+  if (ft === 'boolean') {
+    const trueCount = _fieldCount(field.id, true, days);
+    const falseCount = _fieldCount(field.id, false, days);
+    const streak = _fieldStreak(field.id, field.positive === false ? false : true);
+    const target = field.positive === false ? falseCount : trueCount;
+    const label = field.positive === false ? 'free days' : 'yes days';
+    summary = `<div class="t-field-summary">
+      <strong>${target}</strong> ${label}
+      <span>·</span>
+      <strong>${streak}</strong> day streak
+      <span>·</span>
+      <span>${trueCount+falseCount} of ${days} logged</span>
+    </div>`;
+    vis = days <= 14 ? _buildDotRow(rowMap, field.id, days) : _buildHeatgrid(rowMap, Math.ceil(days/7)+1, field.id, false, false);
+  } else if (ft === 'number' || ft === 'scale') {
+    const delta = _trendDelta(field.id, days);
+    const valStr = delta.cur !== null ? delta.cur.toFixed(ft === 'scale' ? 1 : (field.unit === 'hr' ? 1 : 0)) : '—';
+    summary = `<div class="t-field-summary">
+      <strong>${valStr}${field.unit ? `<span style="font-family:var(--sans);font-size:11px;text-transform:lowercase;color:var(--ink-3)"> ${_esc(field.unit)}</span>` : ''}</strong>
+      <span>${days}-day avg</span>
+      ${delta.pct !== null ? _deltaPill(delta.pct) : ''}
+    </div>`;
+    vis = _buildBarRow(rowMap, field.id, days);
+  } else if (ft === 'multi_select') {
+    vis = _buildMultiBar(rowMap, field, days);
+    summary = `<div class="t-field-summary"><span>${days}-day totals</span></div>`;
+  } else if (ft === 'time') {
+    vis = _buildTimeGraph(rowMap, field, days);
+    summary = `<div class="t-field-summary"><span>wake time · last ${days} days</span></div>`;
+  } else {
+    vis = `<p style="color:var(--ink-3);font-size:13px;margin-top:6px">text field — see Table view</p>`;
+  }
+
+  return `<div class="t-field-block" style="animation:t-fade-up .35s both;animation-delay:${idx*60}ms">
+    <div class="t-field-block-header">
+      <div class="t-field-name">${_esc(field.name)}${field.unit ? `<span class="t-field-unit">${_esc(field.unit)}</span>` : ''}</div>
+      ${summary}
+    </div>
+    ${vis}
+  </div>`;
+}
+
+// ── Day view (7 or 30) ────────────────────────────────────────
+function buildDayView(days, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const fields = window.TRACKER_FIELDS || [];
+  const rowMap = _rowsByDate();
+  container.innerHTML = fields.map((f, i) => _buildFieldBlock(f, rowMap, days, i)).join('');
+}
+
+// ── Calendar view ─────────────────────────────────────────────
+function buildCalendarView(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const fields = window.TRACKER_FIELDS || [];
+  const rowMap = _rowsByDate();
+  let html = `<div class="t-section-label" style="margin-top:4px">All Time — overall activity</div>
+    <div class="t-heatgrid-wrap">`;
+  html += _buildHeatgrid(rowMap, 26, null, false, false);
+  html += '</div>';
+  fields.filter(f => ['boolean','number','scale'].includes(f.field_type)).forEach((f, i) => {
+    const delta = f.field_type === 'boolean'
+      ? `<strong>${_fieldCount(f.id, true, 90)}</strong> of last 90 days`
+      : `<strong>${(_trendDelta(f.id, 30).cur || 0).toFixed(f.unit === 'hr' ? 1 : 0)}</strong> 30-day avg`;
+    html += `<div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--rule-2)">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div class="t-field-name">${_esc(f.name)}${f.unit ? `<span class="t-field-unit">${_esc(f.unit)}</span>` : ''}</div>
+        <div class="t-field-summary">${delta}</div>
+      </div>
+      <div class="t-heatgrid-wrap">${_buildHeatgrid(rowMap, 20, f.id, false, false)}</div>
+    </div>`;
+  });
+  container.innerHTML = html;
+}
+
+// ── Table view ────────────────────────────────────────────────
+function buildTableView(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const fields = window.TRACKER_FIELDS || [];
+  const rows = [...(window.TRACKER_ROWS || [])].slice(0, 60);
+
+  function display(field, v) {
+    if (v === null || v === undefined) return `<span class="v-null">—</span>`;
+    if (field.field_type === 'boolean') {
+      const positive = field.positive !== false;
+      return v ? `<span class="${positive ? 'v-yes' : 'v-no'}">${positive ? '✓ Yes' : 'Yes'}</span>`
+               : `<span class="${positive ? 'v-no' : 'v-yes'}">${positive ? 'No' : '✓ No'}</span>`;
+    }
+    if (Array.isArray(v)) return `<span style="font-size:12px">${_esc(v.join(', '))}</span>`;
+    return `<span class="v-num">${_esc(String(v))}</span>`;
+  }
+
+  let html = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+    <div></div>
+    <button class="btn-secondary" style="font-size:.8rem;padding:.2rem .6rem" onclick="TrackerDetail.openAddRow()">+ Add row</button>
+  </div>
+  <div class="t-table-wrap">
+    <table class="t-table"><thead><tr>
+      <th class="col-date">${TRACKER_CADENCE === 'weekly' ? 'Week' : 'Date'}</th>
+      ${fields.map(f => `<th>${_esc(f.name)}${f.unit ? ` <span style="font-weight:400;color:var(--ink-3)">(${_esc(f.unit)})</span>` : ''}</th>`).join('')}
+      <th>Status</th>
+    </tr></thead><tbody>`;
+  rows.forEach(row => {
+    const vals = window.TRACKER_VALUES?.[row.id] || {};
+    html += `<tr>
+      <td class="col-date">${_esc(_shortDate(row.period_start))}</td>
+      ${fields.map(f => {
+        const valObj = vals[f.id];
+        const v = valObj ? _parseVal(valObj.value_json) : null;
+        return `<td data-row-id="${row.id}" data-field-id="${f.id}" data-field-type="${f.field_type}" onclick="TrackerDetail.startEdit(this)">${display(f, v)}</td>`;
+      }).join('')}
+      <td><span class="t-status t-status--${row.status}">${_esc(row.status.replace('_',' '))}</span></td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
+// ── View switching ────────────────────────────────────────────
+const _viewsBuilt = {};
+function _setView(view, btn) {
+  ['7','30','all','table'].forEach(v => {
+    const el = document.getElementById(`view-${v}`);
+    if (el) el.classList.toggle('hidden', v !== view);
+  });
+  document.querySelectorAll('#tracker-view-tabs .t-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (!_viewsBuilt[view]) {
+    _viewsBuilt[view] = true;
+    if (view === '7')     buildDayView(7, 'viz-7');
+    if (view === '30')    buildDayView(30, 'viz-30');
+    if (view === 'all')   buildCalendarView('viz-all');
+    if (view === 'table') buildTableView('viz-table');
+  }
+}
+
+// ── TrackerDetail public API ──────────────────────────────────
+const TrackerDetail = (() => {
+  const fieldsById = Object.fromEntries((window.TRACKER_FIELDS || []).map(f => [f.id, f]));
+
+  function openEdit() { document.getElementById('tracker-edit-modal').classList.remove('hidden'); }
+  function closeEdit() { document.getElementById('tracker-edit-modal').classList.add('hidden'); }
+  async function saveEdit() {
+    const body = {
+      name: document.getElementById('te-name').value.trim(),
+      description: document.getElementById('te-description').value.trim() || null,
+      cadence: document.getElementById('te-cadence').value,
+    };
+    const res = await fetch(`/api/trackers/${TRACKER_ID}`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if (res.ok) location.reload(); else alert('Save failed.');
+  }
+  async function confirmArchive() {
+    if (!confirm('Archive this tracker? Data is preserved.')) return;
+    const res = await fetch(`/api/trackers/${TRACKER_ID}`, { method: 'DELETE' });
+    if (res.ok) window.location.href = '/trackers';
+  }
+
+  function openAddField() {
+    document.getElementById('af-name').value = '';
+    document.getElementById('af-key').value = '';
+    document.getElementById('af-type').value = 'boolean';
+    document.getElementById('af-unit').value = '';
+    document.getElementById('af-required').checked = false;
+    document.getElementById('af-options').value = '';
+    document.getElementById('af-ai-explanation').value = '';
+    document.getElementById('af-linked-task').value = '';
+    document.getElementById('af-new-task-title').value = '';
+    document.getElementById('af-new-task-rule').value = '';
+    onFieldTypeChange('boolean');
+    document.getElementById('tracker-add-field-modal').classList.remove('hidden');
+    document.getElementById('af-name').focus();
+  }
+  function closeAddField() { document.getElementById('tracker-add-field-modal').classList.add('hidden'); }
+  function autoSlug(name) { document.getElementById('af-key').value = name.toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,''); }
+  function onFieldTypeChange(type) {
+    document.getElementById('af-scale-wrap').style.display = type === 'scale' ? '' : 'none';
+    document.getElementById('af-options-wrap').style.display = ['select','multi_select'].includes(type) ? '' : 'none';
+    document.getElementById('af-unit-wrap').style.display = ['boolean','select','multi_select','text'].includes(type) ? 'none' : '';
+  }
+  async function saveAddField() {
+    const name = document.getElementById('af-name').value.trim();
+    const field_key = document.getElementById('af-key').value.trim();
+    const field_type = document.getElementById('af-type').value;
+    if (!name || !field_key) { alert('Name is required.'); return; }
+    const body = { name, field_key, field_type,
+      required: document.getElementById('af-required').checked,
+      unit: document.getElementById('af-unit').value.trim() || null,
+      ai_explanation: document.getElementById('af-ai-explanation').value.trim() || null,
+      linked_task_id: document.getElementById('af-linked-task').value || null,
+    };
+    const newTaskTitle = document.getElementById('af-new-task-title').value.trim();
+    const newTaskRule  = document.getElementById('af-new-task-rule').value.trim();
+    if (newTaskTitle && newTaskRule) body.recurring_task = { title: newTaskTitle, recurrence_rule: newTaskRule };
+    if (field_type === 'scale') { body.min_value = parseFloat(document.getElementById('af-min').value)||1; body.max_value = parseFloat(document.getElementById('af-max').value)||10; }
+    if (['select','multi_select'].includes(field_type)) { body.options = document.getElementById('af-options').value.split(',').map(s=>s.trim()).filter(Boolean); }
+    const res = await fetch(`/api/trackers/${TRACKER_ID}/fields`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if (res.ok) { closeAddField(); location.reload(); }
+    else { const err = await res.json(); alert(err.error || 'Save failed.'); }
+  }
+  async function deleteField(fieldId, name) {
+    if (!confirm(`Remove field "${name}"? This will also delete all recorded values.`)) return;
+    const res = await fetch(`/api/trackers/${TRACKER_ID}/fields/${fieldId}`, { method: 'DELETE' });
+    if (res.ok) location.reload();
+  }
+
+  function openAddRow() { document.getElementById('ar-date').value = TRACKER_TODAY; document.getElementById('tracker-add-row-modal').classList.remove('hidden'); }
+  function closeAddRow() { document.getElementById('tracker-add-row-modal').classList.add('hidden'); }
+  async function saveAddRow() {
+    const date = document.getElementById('ar-date').value;
+    if (!date) { alert('Date required.'); return; }
+    const res = await fetch(`/api/trackers/${TRACKER_ID}/rows`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ date }) });
+    if (res.ok) { closeAddRow(); location.reload(); } else alert('Failed to add row.');
+  }
+
+  // Inline table cell editing
+  let _activeCell = null;
+  function startEdit(cell) {
+    if (_activeCell) { location.reload(); return; }
+    _activeCell = cell;
+    const fieldType = cell.dataset.fieldType;
+    const fieldId = cell.dataset.fieldId;
+    const rowId = cell.dataset.rowId;
+    let input;
+    if (fieldType === 'boolean') {
+      input = document.createElement('input'); input.type = 'checkbox'; input.className = 'tracker-inline-checkbox';
+    } else if (['scale','number','duration'].includes(fieldType)) {
+      input = document.createElement('input'); input.type = 'number'; input.className = 'modal-input'; input.style.fontSize='.85rem'; input.style.padding='.2rem .4rem';
+    } else if (fieldType === 'time') {
+      input = document.createElement('input'); input.type = 'time'; input.className = 'modal-input'; input.style.fontSize='.85rem'; input.style.padding='.2rem .4rem';
+    } else {
+      input = document.createElement('input'); input.type = 'text'; input.className = 'modal-input'; input.style.fontSize='.85rem'; input.style.padding='.2rem .4rem';
+    }
+    const saveBtn = document.createElement('button'); saveBtn.className = 'btn-save'; saveBtn.style.cssText='font-size:.75rem;padding:.15rem .4rem'; saveBtn.textContent='✓';
+    const cancelBtn = document.createElement('button'); cancelBtn.className = 'btn-secondary'; cancelBtn.style.cssText='font-size:.75rem;padding:.15rem .4rem'; cancelBtn.textContent='✕';
+    const read = () => fieldType==='boolean' ? input.checked : input.value;
+    saveBtn.onclick = () => commitEdit(cell, rowId, fieldId, fieldType, read());
+    cancelBtn.onclick = () => { _activeCell = null; location.reload(); };
+    cell.innerHTML = '';
+    const wrap = document.createElement('div'); wrap.style.cssText='display:flex;gap:.25rem;align-items:center';
+    wrap.append(input, saveBtn, cancelBtn); cell.appendChild(wrap);
+    input.focus();
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') commitEdit(cell, rowId, fieldId, fieldType, read());
+      if (e.key === 'Escape') { _activeCell = null; location.reload(); }
+    });
+  }
+  async function commitEdit(cell, rowId, fieldId, fieldType, rawValue) {
+    _activeCell = null;
+    let value;
+    if (fieldType === 'boolean') value = Boolean(rawValue);
+    else if (['scale','number','duration'].includes(fieldType)) value = rawValue !== '' ? parseFloat(rawValue) : null;
+    else value = rawValue || null;
+    if (value === null) { location.reload(); return; }
+    await fetch(`/api/trackers/${TRACKER_ID}/rows/${rowId}`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ [fieldId]: value }) });
+    location.reload();
+  }
+
+  // Inline question answer (boolean)
+  async function answerQuestion(questionId, value) {
+    const row = document.getElementById(`tq-${questionId}`);
+    if (!row) return;
+    const res = await fetch(`/api/tracker-questions/${questionId}/answer`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ value }),
+    });
+    if (res.ok) { row.style.opacity='.4'; row.style.pointerEvents='none'; setTimeout(() => row.remove(), 400); }
+  }
+  async function dismissQuestion(questionId) {
+    const res = await fetch(`/api/tracker-questions/${questionId}/dismiss`, { method: 'POST' });
+    if (res.ok) {
+      const row = document.getElementById(`tq-${questionId}`);
+      if (row) { row.style.opacity='.4'; row.style.pointerEvents='none'; setTimeout(() => row.remove(), 400); }
+    }
+  }
+
+  // Non-boolean question modal
+  let _activeQuestion = null;
+  function openAnswerQuestion(questionId) {
+    const row = document.getElementById(`tq-${questionId}`);
+    if (!row) return;
+    const field = fieldsById[row.dataset.fieldId];
+    _activeQuestion = { id: questionId, field };
+    document.getElementById('tq-question-text').textContent = row.querySelector('.t-q-text')?.childNodes[0]?.textContent?.trim() || '';
+    const wrap = document.getElementById('tq-answer-input-wrap');
+    wrap.innerHTML = '';
+    if (!field) {
+      const ta = document.createElement('textarea'); ta.id = 'tq-answer-input'; ta.className = 'modal-textarea'; ta.rows = 3; wrap.appendChild(ta);
+    } else {
+      const inp = _createFieldInput(field, 'tq-answer-input'); wrap.appendChild(inp);
+    }
+    document.getElementById('tracker-answer-question-modal').classList.remove('hidden');
+    document.getElementById('tq-answer-input')?.focus();
+  }
+  function closeAnswerQuestion() { _activeQuestion = null; document.getElementById('tracker-answer-question-modal').classList.add('hidden'); }
+  function _createFieldInput(field, id) {
+    let el;
+    if (['number','scale','duration'].includes(field.field_type)) {
+      el = document.createElement('input'); el.type = 'number'; el.className = 'modal-input';
+      if (field.min_value !== null) el.min = field.min_value;
+      if (field.max_value !== null) el.max = field.max_value;
+    } else if (field.field_type === 'time') {
+      el = document.createElement('input'); el.type = 'time'; el.className = 'modal-input';
+    } else {
+      el = document.createElement('input'); el.type = 'text'; el.className = 'modal-input';
+    }
+    el.id = id; return el;
+  }
+  async function saveAnswerQuestion() {
+    if (!_activeQuestion) return;
+    const input = document.getElementById('tq-answer-input');
+    let value = input.value;
+    const f = _activeQuestion.field;
+    if (f && ['number','scale','duration'].includes(f.field_type)) value = value !== '' ? parseFloat(value) : null;
+    const body = f ? { value } : {};
+    const res = await fetch(`/api/tracker-questions/${_activeQuestion.id}/answer`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if (res.ok) { closeAnswerQuestion(); location.reload(); }
+    else { const err = await res.json(); alert(err.error || 'Save failed.'); }
+  }
+
+  function setView(view, btn) { _setView(view, btn); }
+
+  ['tracker-edit-modal','tracker-add-field-modal','tracker-add-row-modal','tracker-answer-question-modal'].forEach(id => {
+    document.getElementById(id)?.addEventListener('click', e => { if (e.target.id === id) document.getElementById(id).classList.add('hidden'); });
+  });
+
+  return {
+    openEdit, closeEdit, saveEdit, confirmArchive,
+    openAddField, closeAddField, autoSlug, onFieldTypeChange, saveAddField, deleteField,
+    openAddRow, closeAddRow, saveAddRow,
+    startEdit, answerQuestion, dismissQuestion, openAnswerQuestion, closeAnswerQuestion, saveAnswerQuestion,
+    setView,
+  };
+})();
+
+// ── Bootstrap ─────────────────────────────────────────────────
+(function init() {
+  _renderLogDate();
+  _renderLogInputs();
+  _renderPullQuote();
+  _renderHero();
+  // Build initial view
+  buildDayView(7, 'viz-7');
+  _viewsBuilt['7'] = true;
+})();
+</script>
+{% endblock %}

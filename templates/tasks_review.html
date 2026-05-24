@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Review — Journal{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Review</h1>
+  <p class="page-subtitle">Suggested tasks from your journal. Decide what to keep.</p>
+</div>
+
+{% if suggested %}
+<div class="review-queue" id="review-queue">
+  {% for task in suggested %}
+  <div class="review-card" id="review-card-{{ task.id }}" data-task-id="{{ task.id }}">
+    <div class="review-card-header">
+      <span class="review-card-title">
+        {% if task.emoji %}<span class="task-emoji">{{ task.emoji }}</span>{% endif %}
+        {{ task.title }}
+      </span>
+      <span class="review-card-meta">
+        {% if task.priority == 'high' %}<span class="task-priority task-priority--high">high</span>{% endif %}
+        {% if task.due_at %}<span class="task-due">{{ task.due_at[:10] }}</span>{% endif %}
+      </span>
+    </div>
+    {% if task.description %}
+    <p class="review-card-desc">{{ task.description }}</p>
+    {% endif %}
+    {% if task.source_entry_id and entry_titles.get(task.source_entry_id) %}
+    <p class="review-card-source">From: {{ entry_titles[task.source_entry_id] }}</p>
+    {% endif %}
+    {% set task_tag_list = task_tags.get(task.id, []) %}
+    {% if task_tag_list %}
+    <div class="review-card-tags">
+      {% for tag in task_tag_list %}
+      <span class="chip" style="border-color:{{ tag.color }}; color:{{ tag.color }}">{{ tag.name }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="review-card-actions">
+      <button class="btn-save review-btn" onclick="Review.accept('{{ task.id }}')">Keep</button>
+      <button class="btn-secondary review-btn" onclick="Review.showSnooze('{{ task.id }}')">Later</button>
+      <button class="btn-secondary review-btn review-btn--danger" onclick="Review.reject('{{ task.id }}')">Not a task</button>
+    </div>
+    <div class="review-snooze-row hidden" id="snooze-row-{{ task.id }}">
+      <input type="date" class="review-snooze-input" id="snooze-date-{{ task.id }}">
+      <button class="btn-secondary review-btn" onclick="Review.snooze('{{ task.id }}')">Park until date</button>
+      <button class="btn-secondary review-btn" onclick="Review.hideSnooze('{{ task.id }}')">Cancel</button>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="tasks-empty-state">
+  <p class="text-muted">No suggested tasks waiting for review.</p>
+  <p class="text-muted" style="font-size:0.85rem">Tasks extracted from journal entries will appear here before entering your task list.</p>
+</div>
+{% endif %}
+
+<script>
+const Review = {
+  async accept(taskId) {
+    const r = await fetch(`/api/tasks/${taskId}/accept`, {method: 'POST'});
+    if (r.ok) Review._removeCard(taskId);
+  },
+  async reject(taskId) {
+    const r = await fetch(`/api/tasks/${taskId}/reject`, {method: 'POST'});
+    if (r.ok) Review._removeCard(taskId);
+  },
+  showSnooze(taskId) {
+    document.getElementById(`snooze-row-${taskId}`).classList.remove('hidden');
+  },
+  hideSnooze(taskId) {
+    document.getElementById(`snooze-row-${taskId}`).classList.add('hidden');
+  },
+  async snooze(taskId) {
+    const due_at = document.getElementById(`snooze-date-${taskId}`).value || null;
+    const r = await fetch(`/api/tasks/${taskId}/snooze`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({due_at})
+    });
+    if (r.ok) Review._removeCard(taskId);
+  },
+  _removeCard(taskId) {
+    const card = document.getElementById(`review-card-${taskId}`);
+    if (card) {
+      card.style.opacity = '0';
+      card.style.transform = 'translateX(20px)';
+      setTimeout(() => {
+        card.remove();
+        const queue = document.getElementById('review-queue');
+        if (queue && !queue.querySelector('.review-card')) {
+          queue.innerHTML = '<p class="text-muted" style="padding:2rem 0">All caught up.</p>';
+        }
+        // Update nav badge count
+        const badge = document.querySelector('.nav-badge');
+        if (badge) {
+          const count = document.querySelectorAll('.review-card').length;
+          if (count === 0) badge.remove();
+          else badge.textContent = count;
+        }
+      }, 200);
+    }
+  }
+};
+</script>
+{% endblock %}

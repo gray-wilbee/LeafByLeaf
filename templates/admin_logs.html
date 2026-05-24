@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Admin Logs{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Logs: {{ target_user.username }}</h1>
+  <a class="btn-secondary" href="{{ url_for('admin_user_detail', user_id=target_user.id) }}">User detail</a>
+</div>
+<div class="log-table-wrap">
+  <table class="log-table">
+    <thead><tr><th>Received</th><th>Status</th><th>Date</th><th>Time</th><th>Words</th><th>Error</th></tr></thead>
+    <tbody>
+      {% for e in entries %}
+      <tr class="log-row log-row--{{ e.status }}">
+        <td>{{ e.received_at[:19].replace('T', ' ') }} UTC</td>
+        <td><span class="log-status log-status--{{ e.status }}">{{ e.status }}</span></td>
+        <td>{{ e.date or '—' }}</td>
+        <td>{{ e.time or '—' }}</td>
+        <td>{{ e.words or '—' }}</td>
+        <td class="log-error">{{ e.error or '' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6">No logs.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

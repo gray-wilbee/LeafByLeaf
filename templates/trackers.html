@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+{% block title %}Trackers — Journal{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Trackers</h1>
+    <div style="font-family:var(--mono);font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:0.4px;margin-top:4px">
+      {{ trackers|length }} active
+      {%- set total_open = trackers | sum(attribute='open_questions') %}
+      {% if total_open %} · {{ total_open }} open question{{ 's' if total_open != 1 }}{% endif %}
+    </div>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="btn-secondary" onclick="TrackersPage.openManual()">Start blank</button>
+    <button class="btn-save" onclick="TrackersPage.openAI()">Create with AI</button>
+  </div>
+</div>
+
+{% if trackers %}
+<p class="pull-quote">
+  <span class="em">A practiced month.</span>
+  {% set total_open = trackers | sum(attribute='open_questions') %}
+  {% if total_open %} {{ total_open }} small thing{{ 's' if total_open != 1 }} waiting for you.{% else %} Nothing outstanding.{% endif %}
+</p>
+
+<div class="t-tracker-list t-stagger">
+  {% for tracker in trackers %}
+  <a href="{{ url_for('tracker_detail_page', tracker_id=tracker.id) }}"
+     class="t-tracker-row"
+     style="--tracker-hue:{{ tracker.hue }};animation-delay:{{ loop.index0 * 60 }}ms">
+    <div>
+      <div class="t-tracker-row-name">
+        <span>{{ tracker.name }}</span>
+        <span class="t-cadence">{% if tracker.cadence == 'ad_hoc' %}As needed{% else %}{{ tracker.cadence|capitalize }}{% endif %}</span>
+        {% if tracker.open_questions %}
+        <span class="t-chip t-chip--accent t-chip--mono">{{ tracker.open_questions }} open</span>
+        {% endif %}
+      </div>
+      {% if tracker.description %}
+      <div class="t-tracker-row-desc">{{ tracker.description }}</div>
+      {% endif %}
+      <div class="t-tracker-row-meta">
+        <span><strong>{{ tracker.row_count }}</strong> {{ 'weeks' if tracker.cadence == 'weekly' else ('months' if tracker.cadence == 'monthly' else ('entries' if tracker.cadence == 'ad_hoc' else 'days')) }} logged</span>
+        <span><strong>{{ tracker.field_count }}</strong> field{{ 's' if tracker.field_count != 1 }}</span>
+        {% for tag in tracker.tags %}
+        <span class="topic-chip" style="--chip-color:{{ tag.color }}">{{ tag.name }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="t-tracker-row-mini">
+      <div class="t-heatgrid-row" data-heatmap="{{ tracker.heatmap_data }}" data-hue="{{ tracker.hue }}"></div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+{% else %}
+<div style="border-top:1px solid var(--ink);border-bottom:1px solid var(--rule);padding:56px 24px 40px;text-align:center">
+  <h2 style="font-family:var(--serif);font-size:38px;font-weight:500;font-style:italic;letter-spacing:-0.6px;margin-bottom:14px;line-height:1.1">What would you like to <em>notice</em>?</h2>
+  <p style="font-family:var(--serif);font-size:16.5px;color:var(--ink-2);max-width:38ch;margin:0 auto 22px;line-height:1.55">Track anything over time — habits, recovery, sleep, workouts, hours of deep work.</p>
+  <button class="btn-save" onclick="TrackersPage.openAI()">Create with AI</button>
+</div>
+{% endif %}
+
+{# ── AI Propose Step 1: Describe ── #}
+<div id="tracker-ai-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Create Tracker</h3>
+    <p class="text-muted" style="margin-bottom:1rem;font-size:.875rem">
+      Describe what you want to track. You will review every field before anything is saved.
+    </p>
+    <label class="modal-label">What do you want to track?
+      <textarea id="tai-request" class="modal-textarea" rows="4"
+        placeholder="Daily wellness: sleep quality, exercise, alcohol, mood, and any notes that explain the day"></textarea>
+    </label>
+    <div id="tai-error" class="hidden" style="color:var(--danger);font-size:.875rem;margin-top:.5rem"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="TrackersPage.closeAI()">Cancel</button>
+      <button class="btn-save" id="tai-propose-btn" onclick="TrackersPage.propose()">Draft tracker</button>
+    </div>
+  </div>
+</div>
+
+{# ── AI Propose Step 2: Review schema ── #}
+<div id="tracker-review-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide tracker-review-card">
+    <h3>Review Tracker Draft</h3>
+    <p class="text-muted" style="font-size:.875rem;margin-bottom:.75rem">
+      Make the labels read naturally. The AI guidance is only for how entries should be filled from journal text.
+    </p>
+    <div class="tracker-modal-grid">
+      <label class="modal-label" style="margin:0">Name
+        <input type="text" id="tr-name" class="modal-input">
+      </label>
+      <label class="modal-label" style="margin:0">Cadence
+        <select id="tr-cadence" class="modal-input">
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+          <option value="ad_hoc">As needed</option>
+        </select>
+      </label>
+    </div>
+    <label class="modal-label">Description
+      <input type="text" id="tr-description" class="modal-input">
+    </label>
+    <div class="tracker-fields-heading">Fields</div>
+    <div id="tr-fields-list"></div>
+    <button class="btn-text tracker-add-field-link" onclick="TrackersPage.addReviewField()">+ Add field</button>
+    <div class="modal-actions" style="margin-top:1.25rem">
+      <button class="btn-secondary" onclick="TrackersPage.backToDescribe()">← Back</button>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn-secondary" onclick="TrackersPage.closeReview()">Cancel</button>
+        <button class="btn-save" onclick="TrackersPage.saveProposal()">Create Tracker</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Manual create modal ── #}
+<div id="tracker-manual-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Start Blank Tracker</h3>
+    <label class="modal-label">Name *
+      <input type="text" id="tc-name" class="modal-input" placeholder="e.g. Daily Wellness">
+    </label>
+    <label class="modal-label">Description
+      <input type="text" id="tc-description" class="modal-input" placeholder="Optional">
+    </label>
+    <label class="modal-label">Cadence
+      <select id="tc-cadence" class="modal-input">
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+        <option value="monthly">Monthly</option>
+        <option value="ad_hoc">As needed</option>
+      </select>
+    </label>
+    <label class="modal-label">Start date
+      <input type="date" id="tc-start-date" class="modal-input">
+    </label>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="TrackersPage.closeManual()">Cancel</button>
+      <button class="btn-save" onclick="TrackersPage.saveManual()">Create</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const FIELD_TYPES = [
+  ['boolean', 'Yes / No'],
+  ['number', 'Number'],
+  ['text', 'Short text'],
+  ['scale', 'Rating scale'],
+  ['time', 'Time of day'],
+  ['duration', 'Duration'],
+  ['select', 'One choice'],
+  ['multi_select', 'Multiple choices'],
+];
+const INFERENCE_POLICIES = [
+  ['manual_only', 'I will enter it myself'],
+  ['infer_when_explicit', 'Use only clear journal mentions'],
+  ['infer_when_likely', 'Infer when the entry strongly suggests it'],
+  ['system_computed', 'Calculate automatically'],
+  ['ask_if_missing', 'Ask me when missing'],
+];
+const TRACKERS_TODAY = '{{ current_date }}';
+
+// ── Mini heatgrid rendering ──────────────────────────────────
+(function renderMiniHeatgrids() {
+  document.querySelectorAll('[data-heatmap]').forEach(container => {
+    let data;
+    try { data = JSON.parse(container.dataset.heatmap || '[]'); } catch { data = []; }
+    const hue = container.dataset.hue || 'var(--accent)';
+
+    const map = {};
+    data.forEach(d => { map[d.date] = d.has_data; });
+
+    const weeks = 13;
+    const parts = TRACKERS_TODAY.split('-').map(Number);
+    const today = new Date(parts[0], parts[1] - 1, parts[2]);
+    const todayDow = today.getDay();
+    const lastColEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate() + (6 - todayDow));
+    const totalDays = weeks * 7;
+    const start = new Date(lastColEnd.getFullYear(), lastColEnd.getMonth(), lastColEnd.getDate() - totalDays + 1);
+
+    const grid = document.createElement('div');
+    grid.className = 't-heatgrid t-heatgrid--mini';
+    grid.style.cssText = `grid-template-columns:repeat(${weeks},auto);--tracker-hue:${hue}`;
+
+    for (let i = 0; i < totalDays; i++) {
+      const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      const iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      const cell = document.createElement('div');
+      let cls = 't-heatcell';
+      if (d > today) cls += ' t-heatcell--empty';
+      else if (map[iso]) cls += ' t-heatcell--filled';
+      else cls += ' t-heatcell--empty';
+      if (iso === TRACKERS_TODAY) cls += ' t-heatcell--today';
+      cell.className = cls;
+      cell.title = iso;
+      grid.appendChild(cell);
+    }
+    container.appendChild(grid);
+  });
+})();
+
+// ── TrackersPage JS ──────────────────────────────────────────
+const TrackersPage = (() => {
+  let proposedFields = [];
+
+  function openAI() {
+    document.getElementById('tai-request').value = '';
+    document.getElementById('tai-error').classList.add('hidden');
+    document.getElementById('tracker-ai-modal').classList.remove('hidden');
+    document.getElementById('tai-request').focus();
+  }
+  function closeAI() { document.getElementById('tracker-ai-modal').classList.add('hidden'); }
+
+  async function propose() {
+    const requestText = document.getElementById('tai-request').value.trim();
+    if (!requestText) { showAIError('Please describe what you want to track.'); return; }
+    const btn = document.getElementById('tai-propose-btn');
+    btn.textContent = 'Drafting...'; btn.disabled = true;
+    document.getElementById('tai-error').classList.add('hidden');
+    try {
+      const res = await fetch('/api/trackers/propose', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ request: requestText }),
+      });
+      if (!res.ok) { showAIError('Could not draft a tracker. Try again or start blank.'); return; }
+      const schema = await res.json();
+      closeAI(); openReview(schema);
+    } catch (e) { showAIError('Request failed. Check your connection.'); }
+    finally { btn.textContent = 'Draft tracker'; btn.disabled = false; }
+  }
+
+  function showAIError(msg) {
+    const el = document.getElementById('tai-error');
+    el.textContent = msg; el.classList.remove('hidden');
+  }
+
+  function openReview(schema) {
+    document.getElementById('tr-name').value = schema.name || '';
+    document.getElementById('tr-description').value = schema.description || '';
+    document.getElementById('tr-cadence').value = schema.cadence || 'daily';
+    proposedFields = (schema.fields || []).map(f => ({ ...f }));
+    renderReviewFields();
+    document.getElementById('tracker-review-modal').classList.remove('hidden');
+  }
+  function closeReview() { document.getElementById('tracker-review-modal').classList.add('hidden'); }
+  function backToDescribe() { closeReview(); document.getElementById('tracker-ai-modal').classList.remove('hidden'); }
+
+  function renderReviewFields() {
+    const container = document.getElementById('tr-fields-list');
+    if (!proposedFields.length) { container.innerHTML = '<p class="text-muted" style="font-size:.875rem">No fields yet.</p>'; return; }
+    container.innerHTML = proposedFields.map((f, i) => `
+      <div class="review-field-row" data-idx="${i}">
+        <div class="review-field-main">
+          <input type="text" class="modal-input rf-name" placeholder="Field name" value="${esc(f.name || '')}" onchange="TrackersPage.updateField(${i},'name',this.value)">
+          <select class="modal-input rf-type" onchange="TrackersPage.updateField(${i},'field_type',this.value)">
+            ${FIELD_TYPES.map(([value, label]) => `<option value="${value}"${f.field_type===value?' selected':''}>${label}</option>`).join('')}
+          </select>
+          ${f.unit !== undefined && f.unit !== null ? `<input type="text" class="modal-input rf-unit" placeholder="Unit" value="${esc(f.unit||'')}" onchange="TrackersPage.updateField(${i},'unit',this.value)">` : ''}
+        </div>
+        <div class="review-field-meta">
+          <label style="font-size:.8rem;display:flex;align-items:center;gap:.3rem">
+            <input type="checkbox" ${f.required?'checked':''} onchange="TrackersPage.updateField(${i},'required',this.checked)"> Required
+          </label>
+          <select class="modal-input rf-policy" onchange="TrackersPage.updateField(${i},'inference_policy',this.value)">
+            ${INFERENCE_POLICIES.map(([value, label]) => `<option value="${value}"${(f.inference_policy||'ask_if_missing')===value?' selected':''}>${label}</option>`).join('')}
+          </select>
+          <button class="btn-text review-field-remove" onclick="TrackersPage.removeField(${i})">Remove</button>
+        </div>
+        <label class="review-field-ai">
+          <span>AI prompt</span>
+          <textarea class="modal-textarea review-field-ai-prompt" rows="3" placeholder="When should this be filled from journal entries?" onchange="TrackersPage.updateField(${i},'ai_explanation',this.value)">${esc(f.ai_explanation || '')}</textarea>
+        </label>
+      </div>
+    `).join('');
+  }
+
+  function esc(s) { return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+  function updateField(i, key, value) { proposedFields[i][key] = value; }
+  function removeField(i) { proposedFields.splice(i, 1); renderReviewFields(); }
+  function addReviewField() {
+    proposedFields.push({ name: '', field_key: '', field_type: 'boolean', required: false, inference_policy: 'ask_if_missing' });
+    renderReviewFields();
+    document.querySelectorAll('.review-field-row')[proposedFields.length-1]?.querySelector('.rf-name')?.focus();
+  }
+
+  async function saveProposal() {
+    const name = document.getElementById('tr-name').value.trim();
+    if (!name) { alert('Tracker name is required.'); return; }
+    for (const f of proposedFields) {
+      if (!f.field_key && f.name) f.field_key = f.name.toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'');
+    }
+    const validFields = proposedFields.filter(f => f.name && f.field_key && f.field_type);
+    const body = { name, description: document.getElementById('tr-description').value.trim() || null, cadence: document.getElementById('tr-cadence').value, fields: validFields };
+    const res = await fetch('/api/trackers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if (res.ok) { const d = await res.json(); window.location.href = `/trackers/${d.id}`; }
+    else alert('Failed to create tracker.');
+  }
+
+  function openManual() {
+    document.getElementById('tc-name').value = '';
+    document.getElementById('tc-description').value = '';
+    document.getElementById('tc-cadence').value = 'daily';
+    document.getElementById('tc-start-date').value = TRACKERS_TODAY;
+    document.getElementById('tracker-manual-modal').classList.remove('hidden');
+    document.getElementById('tc-name').focus();
+  }
+  function closeManual() { document.getElementById('tracker-manual-modal').classList.add('hidden'); }
+  async function saveManual() {
+    const name = document.getElementById('tc-name').value.trim();
+    if (!name) { alert('Name is required.'); return; }
+    const body = { name, description: document.getElementById('tc-description').value.trim() || null, cadence: document.getElementById('tc-cadence').value, start_date: document.getElementById('tc-start-date').value || null };
+    const res = await fetch('/api/trackers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    if (res.ok) { const d = await res.json(); window.location.href = `/trackers/${d.id}`; }
+    else alert('Failed to create tracker.');
+  }
+
+  ['tracker-ai-modal','tracker-review-modal','tracker-manual-modal'].forEach(id => {
+    document.getElementById(id)?.addEventListener('click', e => { if (e.target.id === id) document.getElementById(id).classList.add('hidden'); });
+  });
+
+  return { openAI, closeAI, propose, openReview, closeReview, backToDescribe,
+           updateField, removeField, addReviewField, saveProposal,
+           openManual, closeManual, saveManual, openCreate: openManual };
+})();
+</script>
+
+<style>
+.tracker-review-card { max-height: calc(100dvh - 32px); overflow-y: auto; }
+.tracker-review-card .modal-actions { position: sticky; bottom: 0; background: var(--paper); border-top: 1px solid var(--rule); padding-top: .75rem; box-shadow: 0 -8px 12px var(--paper); }
+.tracker-modal-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; margin-bottom:1rem; }
+.tracker-fields-heading { margin:.75rem 0 .4rem; font-weight:600; font-size:.9rem; }
+.tracker-add-field-link { font-size:.8rem; margin-top:.4rem; }
+.review-field-row { border: 1px solid var(--rule); border-radius: 6px; padding: .75rem; margin-bottom: .6rem; background: color-mix(in oklab, var(--paper) 82%, var(--bg)); }
+.review-field-main { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, .75fr) minmax(72px, .3fr); gap: .5rem; margin-bottom: .5rem; }
+.review-field-main .modal-input { min-width: 0; }
+.review-field-main .rf-unit { width: 100%; }
+.review-field-meta { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.review-field-meta .rf-policy { max-width: 260px; font-size:.82rem; padding:.35rem .45rem; }
+.review-field-remove { color:var(--danger); font-size:.8rem; }
+.review-field-ai { display:block; margin-top:.55rem; }
+.review-field-ai span { display:block; font-family:var(--mono); font-size:10px; letter-spacing:.45px; text-transform:uppercase; color:var(--ink-3); margin-bottom:.25rem; }
+.review-field-ai-prompt { min-height: 82px; max-height: 180px; overflow:auto; resize:vertical; font-family:var(--sans); line-height:1.45; }
+@media (max-width: 640px) {
+  .tracker-modal-grid,
+  .review-field-main { grid-template-columns: 1fr; }
+  .review-field-meta { align-items: stretch; }
+  .review-field-meta .rf-policy { max-width: none; }
+  .tracker-review-card .modal-actions { flex-direction: column; align-items: stretch; }
+  .tracker-review-card .modal-actions > div { display:grid !important; grid-template-columns:1fr 1fr; }
+}
+</style>
+{% endblock %}

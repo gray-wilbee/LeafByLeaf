@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>{% block title %}Journal{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..700;1,8..60,300..700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='search.js') }}" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"
+          integrity="sha512-xeUh+KxNyTufZOje++oQHstlMQ8/rpyzPuM+gjMFYK3z5ILJGE7l2NvYL+XfliKURMpBIKKp1XoPN/qswlSMFA=="
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <!-- PWA -->
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+  <meta name="theme-color" content="#B85C2A">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Journal">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <nav class="nav">
+    <span class="nav-brand">Journal</span>
+    <div class="nav-links" id="navLinks">
+      <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint in ('index', 'entry_view') %}active{% endif %}" data-nav-priority="1">Journal</a>
+      <a href="{{ url_for('chat_page') }}" class="nav-link {% if request.endpoint in ('chat_page', 'chat_page_active') %}active{% endif %}" data-nav-priority="2">Chat</a>
+      <a href="{{ url_for('tasks_list') }}" class="nav-link nav-link--badge {% if request.endpoint in ('tasks_list', 'tasks_today', 'tasks_review') %}active{% endif %}" data-nav-priority="3">Tasks{% if suggested_count > 0 %}<span class="nav-badge">{{ suggested_count }}</span>{% endif %}</a>
+      <button class="nav-search-btn" onclick="GlobalSearch.open()" title="Search (⌘K)" data-nav-priority="4">Search</button>
+      <a href="{{ url_for('entities_list') }}" class="nav-link {% if request.endpoint in ('entities_list', 'entity_detail') %}active{% endif %}" data-nav-priority="5">Entities</a>
+      <a href="{{ url_for('topics_list') }}" class="nav-link {% if request.endpoint in ('topics_list', 'topic_detail') %}active{% endif %}" data-nav-priority="6">Topics</a>
+      {% if session.get("is_admin") %}<a href="{{ url_for('decisions_list') }}" class="nav-link {% if request.endpoint == 'decisions_list' %}active{% endif %}" data-nav-priority="7">Decisions</a>{% endif %}
+      <a href="{{ url_for('trackers_list') }}" class="nav-link {% if request.endpoint in ('trackers_list', 'tracker_detail_page') %}active{% endif %}" data-nav-priority="8">Trackers</a>
+      <a href="{{ url_for('logs_view') }}" class="nav-link nav-link--badge {% if request.endpoint == 'logs_view' %}active{% endif %}" data-nav-priority="9">Logs{% if failed_log_count > 0 %}<span class="nav-badge">{{ failed_log_count }}</span>{% endif %}</a>
+      <a href="{{ url_for('settings_view') }}" class="nav-link {% if request.endpoint == 'settings_view' %}active{% endif %}" data-nav-priority="10">Settings</a>
+      {% if session.get("is_admin") %}<a href="{{ url_for('admin_view') }}" class="nav-link {% if request.endpoint and request.endpoint.startswith('admin') %}active{% endif %}" data-nav-priority="11">Admin</a>{% endif %}
+      <a href="{{ url_for('logout') }}" class="nav-link nav-logout" data-nav-priority="12">Sign out</a>
+      <div class="nav-more-wrap" id="navOverflow" style="display:none">
+        <button class="nav-more-btn" id="navMoreBtn" type="button" aria-label="More navigation">☰</button>
+        <div class="nav-more-dropdown" id="navMoreDropdown"></div>
+      </div>
+    </div>
+  </nav>
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+  <!-- Global search palette -->
+  <div id="gsearch-overlay" class="gsearch-overlay hidden" role="dialog" aria-modal="true" aria-label="Search">
+    <div class="gsearch-modal">
+      <div class="gsearch-header">
+        <span class="gsearch-icon" aria-hidden="true">⌕</span>
+        <input id="gsearch-input" class="gsearch-input" type="search"
+               placeholder="Search tasks, topics, entities…" autocomplete="off" spellcheck="false">
+        <kbd class="gsearch-esc" onclick="GlobalSearch.close()">Esc</kbd>
+      </div>
+      <div id="gsearch-results" class="gsearch-results"></div>
+    </div>
+  </div>
+  <script>
+    window.VJSanitize = function(html) {
+      var doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+      doc.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach(function(el) { el.remove(); });
+      doc.body.querySelectorAll('*').forEach(function(el) {
+        Array.from(el.attributes).forEach(function(attr) {
+          var name = attr.name.toLowerCase();
+          var value = String(attr.value || '').trim().toLowerCase();
+          if (name.indexOf('on') === 0 || ((name === 'href' || name === 'src') && value.indexOf('javascript:') === 0)) {
+            el.removeAttribute(attr.name);
+          }
+        });
+      });
+      return doc.body.innerHTML;
+    };
+    (function() {
+      var token = document.querySelector('meta[name="csrf-token"]')?.content || '';
+      if (!token || !window.fetch) return;
+      var originalFetch = window.fetch.bind(window);
+      window.fetch = function(input, init) {
+        init = init || {};
+        var method = (init.method || (input && input.method) || 'GET').toUpperCase();
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && url.indexOf('/api/') === 0) {
+          var headers = new Headers(init.headers || {});
+          if (!headers.has('X-CSRF-Token')) headers.set('X-CSRF-Token', token);
+          init.headers = headers;
+        }
+        return originalFetch(input, init);
+      };
+    })();
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+        .then(function(reg) { reg.update(); });
+    }
+    (function () {
+      var nav = document.querySelector('.nav');
+      var linksEl = document.getElementById('navLinks');
+      var overflowWrap = document.getElementById('navOverflow');
+      var dropdown = document.getElementById('navMoreDropdown');
+      var moreBtn = document.getElementById('navMoreBtn');
+      if (!nav || !linksEl || !overflowWrap) return;
+
+      // Sort items by priority ascending; highest number overflows first
+      var items = Array.from(linksEl.querySelectorAll('[data-nav-priority]'))
+        .sort(function (a, b) { return +a.dataset.navPriority - +b.dataset.navPriority; });
+
+      function isOverflowing() {
+        return nav.scrollWidth > nav.offsetWidth + 1;
+      }
+
+      function reflow() {
+        // Reset: show all items
+        items.forEach(function (item) {
+          item.style.display = '';
+          item.removeAttribute('data-nav-hidden');
+        });
+        overflowWrap.style.display = 'none';
+        dropdown.innerHTML = '';
+
+        if (!isOverflowing()) return;
+
+        // Show overflow button so its width factors into subsequent measurements
+        overflowWrap.style.display = '';
+
+        // Hide lowest-priority items until nothing overflows
+        for (var i = items.length - 1; i >= 0; i--) {
+          if (!isOverflowing()) break;
+          items[i].style.display = 'none';
+          items[i].setAttribute('data-nav-hidden', '1');
+        }
+
+        // Populate dropdown in DOM order so items appear in reading order
+        linksEl.querySelectorAll('[data-nav-hidden]').forEach(function (item) {
+          var clone = item.cloneNode(true);
+          clone.style.display = '';
+          clone.removeAttribute('data-nav-hidden');
+          clone.removeAttribute('data-nav-priority');
+          dropdown.appendChild(clone);
+        });
+      }
+
+      moreBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        overflowWrap.classList.toggle('open');
+      });
+      document.addEventListener('click', function () {
+        overflowWrap.classList.remove('open');
+      });
+
+      new ResizeObserver(reflow).observe(nav);
+      reflow();
+    })();
+  </script>
+</body>
+</html>

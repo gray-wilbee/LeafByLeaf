@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Journal — Create account</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..700;1,8..60,300..700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: oklch(97.2% 0.012 80);
+      --paper: oklch(98.8% 0.008 80);
+      --ink: oklch(22% 0.015 60);
+      --ink-2: oklch(42% 0.02 60);
+      --ink-3: oklch(58% 0.018 60);
+      --rule: oklch(88% 0.014 80);
+      --accent: oklch(58% 0.15 40);
+      --serif: "Source Serif 4", Georgia, serif;
+      --sans: "Inter", -apple-system, sans-serif;
+      --mono: "JetBrains Mono", monospace;
+    }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      width: 340px;
+      padding: 48px 40px;
+    }
+    h1 {
+      font-family: var(--serif);
+      font-size: 28px;
+      font-weight: 500;
+      font-style: italic;
+      letter-spacing: -0.4px;
+      margin-bottom: 6px;
+      color: var(--ink);
+    }
+    .subtitle {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 32px;
+    }
+    label {
+      display: block;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 3px;
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 14px;
+      padding: 9px 12px;
+      margin-bottom: 18px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus { border-color: var(--accent); }
+    button {
+      width: 100%;
+      background: var(--ink);
+      border: none;
+      border-radius: 2px;
+      color: var(--paper);
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      padding: 11px;
+      margin-top: 4px;
+      transition: background 0.15s;
+    }
+    button:hover { background: var(--ink-2); }
+    .error {
+      font-family: var(--sans);
+      font-size: 13px;
+      color: oklch(50% 0.18 25);
+      margin-bottom: 16px;
+      padding: 8px 0;
+      border-bottom: 1px solid oklch(88% 0.06 25);
+    }
+    .alt-link {
+      display: block;
+      text-align: center;
+      margin-top: 20px;
+      font-family: var(--sans);
+      font-size: 13px;
+      color: var(--ink-3);
+    }
+    .alt-link a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .alt-link a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Voice Journal</h1>
+    <p class="subtitle">create account</p>
+    {% if success %}
+    <div class="error" style="color:oklch(45% 0.12 145);border-bottom-color:oklch(88% 0.06 145)">Account created. It is pending approval before you can sign in.</div>
+    {% else %}
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+    <form method="POST">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" autofocus value="{{ request.form.get('username', '') }}">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="new-password">
+      <label for="password2">Confirm password</label>
+      <input id="password2" name="password2" type="password" autocomplete="new-password">
+      <button type="submit">Create account</button>
+    </form>
+    <p class="alt-link">Already have an account? <a href="{{ url_for('login') }}">Sign in</a></p>
+    {% endif %}
+  </div>
+</body>
+</html>

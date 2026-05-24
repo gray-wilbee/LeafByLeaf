@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% block title %}{{ entity.name }} — Entities{% endblock %}
+
+{% block head %}
+<script>const ENTITY_ID = {{ entity.id }};</script>
+{% endblock %}
+
+{% block content %}
+<nav class="breadcrumbs">
+  {% if from_entry %}
+  <a href="{{ url_for('entry_view', entry_id=from_entry) }}">Entry</a>
+  <span>/</span>
+  {% endif %}
+  <a href="{{ url_for('entities_list') }}">Entities</a>
+  <span>/</span>
+  <span>{{ entity.name }}</span>
+</nav>
+<!-- Header -->
+<div class="topic-header" id="entity-header" style="--topic-color: {{ entity.color }};">
+  <div class="topic-header-accent"></div>
+  <div class="topic-header-body">
+
+    <div class="topic-name-row">
+      <h1 class="topic-name" id="entity-name-display">{{ entity.name }}</h1>
+      <button class="icon-btn" onclick="Entity.editName()" title="Edit name">✎</button>
+    </div>
+
+    <div class="topic-desc-row">
+      <p class="topic-desc" id="entity-desc-display">{{ entity.description or 'No description.' }}</p>
+      <button class="icon-btn" onclick="Entity.editDesc()" title="Edit description">✎</button>
+      <button class="btn-secondary" onclick="Entity.refreshDescription()">Refresh description</button>
+    </div>
+
+    <div class="topic-actions">
+      <button class="btn-secondary" onclick="Entity.compact()">Compact</button>
+      <button class="btn-secondary" onclick="Entity.openMerge()">Merge</button>
+      <button class="btn-danger" onclick="Entity.deleteEntity()">Delete</button>
+    </div>
+
+    <div class="color-picker">
+      {% for color in palette %}
+      <button class="color-swatch {% if color == entity.color %}active{% endif %}"
+              style="background: {{ color }};"
+              data-color="{{ color }}"
+              onclick="Entity.setColor('{{ color }}')"
+              title="{{ color }}"></button>
+      {% endfor %}
+    </div>
+
+  </div>
+</div>
+
+<!-- Summary -->
+<section class="topic-section">
+  <div class="section-header">
+    <h2>Summary</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn-secondary" onclick="Entity.editSummary()" id="summary-edit-btn">Edit</button>
+      <button class="btn-secondary" id="summary-refresh-btn" onclick="Entity.refreshSummary()">
+        {{ 'Refresh summary' if entity.summary else 'Create summary' }}
+      </button>
+    </div>
+  </div>
+  <div id="entity-summary-wrap">
+    {% if entity.summary %}
+    <div class="topic-summary" id="entity-summary">{{ entity.summary_html|safe }}</div>
+    {% else %}
+    <p class="text-muted" id="entity-summary-empty">No summary yet.</p>
+    {% endif %}
+  </div>
+  <div id="summary-edit-area" class="hidden" style="margin-top:10px;">
+    <textarea id="summary-edit-textarea" class="modal-textarea modal-textarea--entry" style="min-height:200px;" placeholder="Write summary in markdown…">{{ entity.summary or '' }}</textarea>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+      <button class="btn-cancel" onclick="Entity.cancelSummaryEdit()">Cancel</button>
+      <button class="btn-save" onclick="Entity.saveSummaryEdit()">Save</button>
+    </div>
+  </div>
+</section>
+
+<!-- Entries -->
+<section class="topic-section">
+  <div class="section-header">
+    <h2>Entries ({{ entries|length }})</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn-secondary" onclick="Entity.openAddNote()">Add note</button>
+      {% if archived_entries %}
+      <button class="btn-secondary" id="archived-toggle-btn" onclick="Entity.toggleArchived()">
+        View archived ({{ archived_entries|length }})
+      </button>
+      {% endif %}
+    </div>
+  </div>
+
+  <div id="active-entries">
+    {% for entry in entries %}
+    <div class="topic-entry">
+      <div class="topic-entry-header" onclick="Entity.toggleEntry({{ entry.id }})">
+        <span class="topic-entry-date">{{ entry.note_date }}</span>
+        <span class="topic-entry-toggle" id="toggle-{{ entry.id }}">▶</span>
+      </div>
+      <div class="topic-entry-content hidden" id="entry-{{ entry.id }}">{{ entry.content_html|safe }}</div>
+    </div>
+    {% else %}
+    <p class="text-muted">No entries yet.</p>
+    {% endfor %}
+  </div>
+
+  {% if archived_entries %}
+  <div id="archived-entries" class="hidden">
+    <p class="section-subheader">Archived entries</p>
+    {% for entry in archived_entries %}
+    <div class="topic-entry topic-entry--archived">
+      <div class="topic-entry-header" onclick="Entity.toggleEntry('a{{ entry.id }}')">
+        <span class="topic-entry-date">{{ entry.note_date }} <span class="text-muted"> · archived</span></span>
+        <span class="topic-entry-toggle" id="toggle-a{{ entry.id }}">▶</span>
+      </div>
+      <div class="topic-entry-content hidden" id="entry-a{{ entry.id }}">{{ entry.content_html|safe }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<!-- Connections -->
+<section class="topic-section">
+  <div class="section-header">
+    <h2>Connections</h2>
+    <button class="btn-secondary" onclick="Entity.openLinkModal()">+ Add</button>
+  </div>
+  {% if backlinks %}
+  <div id="backlinks-list">
+    {% for link in backlinks %}
+    <div class="backlink-row">
+      <a href="{{ url_for('entity_detail', entity_id=link.linked_id) if link.linked_kind == 'entity' else url_for('topic_detail', topic_id=link.linked_id) }}"
+         class="backlink-name">{{ link.linked_name }}</a>
+      <span class="backlink-kind">{{ link.linked_kind }}</span>
+      {% if link.note %}<span class="backlink-note">— {{ link.note }}</span>{% endif %}
+      <button class="task-delete-btn" onclick="Entity.removeLink({{ link.linked_id }})" title="Remove">×</button>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-muted">No connections yet.</p>
+  {% endif %}
+</section>
+
+<!-- Chat -->
+<section class="topic-section">
+  <div class="section-header">
+    <h2>Chat</h2>
+    <button class="btn-secondary" onclick="Entity.openChatModal()">Open Chat</button>
+  </div>
+  {% if chats %}
+  <div class="chat-list">
+    {% for chat in chats %}
+    <div class="chat-list-item" onclick="Entity.openChatModal({{ chat.id }})">
+      <span>{{ chat.title }}</span>
+      <span class="text-muted">{{ chat.created_at[:10] }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<!-- Unified chat modal -->
+<div id="entity-chat-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--chat">
+    <div class="modal-chat-header">
+      <div class="modal-chat-scope">
+        <span class="topic-chip" style="--chip-color: {{ entity.color }}">{{ entity.name }}</span>
+      </div>
+      <button class="icon-btn" onclick="Entity.closeChatModal()">✕</button>
+    </div>
+    <div class="chat-window modal-chat-window" id="modal-chat-window">
+      <div class="chat-messages" id="modal-chat-messages"></div>
+    </div>
+    <div class="chat-save-actions">
+      <button class="btn-secondary" id="modal-save-summary-btn" onclick="Entity.saveChatSummary()">Save Summary</button>
+      <button class="btn-secondary" id="modal-save-transcript-btn" onclick="Entity.saveChatTranscript()">Save Transcript</button>
+    </div>
+    <form class="chat-form" id="modal-chat-form" autocomplete="off">
+      <textarea id="modal-chat-input" class="chat-input" placeholder="Ask about this entity…" rows="1"></textarea>
+      <button type="submit" class="chat-send" id="modal-chat-send">Send</button>
+    </form>
+  </div>
+</div>
+
+<!-- Add note modal -->
+<div id="add-note-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide">
+    <h3>Add note</h3>
+    <label class="modal-label" for="note-date">Date</label>
+    <input type="date" id="note-date" class="modal-input" value="{{ today }}">
+    <label class="modal-label" for="note-content">Note <span class="text-muted">(markdown)</span></label>
+    <textarea id="note-content" class="modal-textarea modal-textarea--entry" placeholder="Write note in markdown…"></textarea>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn-secondary" onclick="Entity.closeAddNote()">Cancel</button>
+      <button class="btn-save" id="add-note-submit" onclick="Entity.submitNote()">Add note</button>
+    </div>
+  </div>
+</div>
+
+<!-- Merge modal -->
+<div id="merge-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Merge into another entity</h3>
+    <p class="text-muted">
+      This will delete <strong>{{ entity.name }}</strong> and move all its entries to the selected entity.
+      This cannot be undone.
+    </p>
+    {% if other_entities %}
+    <select id="merge-target-select" class="form-select">
+      {% for e in other_entities %}
+      <option value="{{ e.id }}">{{ e.name }}</option>
+      {% endfor %}
+    </select>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="Entity.closeMerge()">Cancel</button>
+      <button class="btn-danger" onclick="Entity.confirmMerge()">Merge</button>
+    </div>
+    {% else %}
+    <p class="text-muted">No other entities to merge into.</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="Entity.closeMerge()">Close</button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Add link modal -->
+<div id="link-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Add connection</h3>
+    <label class="modal-label" for="link-target-select">Connect to</label>
+    <select id="link-target-select" class="form-select">
+      <optgroup label="Entities">
+        {% for t in all_tags if t.kind == 'entity' and t.id != entity.id %}
+        <option value="{{ t.id }}">{{ t.name }}</option>
+        {% endfor %}
+      </optgroup>
+      <optgroup label="Topics">
+        {% for t in all_tags if t.kind == 'topic' %}
+        <option value="{{ t.id }}">{{ t.name }}</option>
+        {% endfor %}
+      </optgroup>
+    </select>
+    <label class="modal-label" for="link-note">Note <span class="text-muted">(optional)</span>
+      <input id="link-note" type="text" class="modal-input" placeholder="How are they related?">
+    </label>
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn-secondary" onclick="Entity.closeLinkModal()">Cancel</button>
+      <button class="btn-save" onclick="Entity.submitLink()">Add</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='chat.js') }}"></script>
+<script src="{{ url_for('static', filename='entities.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,717 @@
+{% extends "base.html" %}
+{% block title %}Journal{% endblock %}
+{% block head %}
+<script src="{{ url_for('static', filename='filters.js') }}" defer></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+  <h1>Journal</h1>
+  <div class="page-header-actions">
+    <a href="{{ url_for('index') }}" class="btn-secondary {% if not active_tag_ids and not date_from and not date_to %}btn-secondary--active{% endif %}">Default View</a>
+    <button class="btn-secondary" onclick="openJournalFilter()">Filter</button>
+    <button class="btn-secondary" onclick="GuidedJournal.open()">Prompt Me</button>
+    <button class="btn-secondary" onclick="openNewEntry()">New entry</button>
+  </div>
+</div>
+
+{% if entries %}
+<ul class="entry-list">
+  {% for e in entries %}
+  <li class="entry-item {% if e.is_today %}entry-item--today{% endif %}">
+    <a href="{{ url_for('entry_view', entry_id=e.id) }}" class="entry-link">
+      <div class="entry-link-meta">
+        <span class="entry-link-date"><span class="entry-source-icon entry-source-icon--{{ e.source_icon }}">{{ '💬' if e.source_icon == 'chat' else '📓' }}</span>{{ e.title }}</span>
+        <span class="entry-link-time">{{ e.display_datetime }}</span>
+        <span class="entry-source-label">{{ e.source_label }}</span>
+        {% if e.is_today %}<span class="day-badge">today</span>{% endif %}
+      </div>
+      <p class="entry-link-preview">{{ e.preview }}</p>
+    </a>
+    {% if e.tags %}
+    <div class="entry-list-tags">
+      {% for tag in e.tags %}
+      <a href="{{ url_for('entity_detail', entity_id=tag.id) if tag.kind == 'entity' else url_for('topic_detail', topic_id=tag.id) }}" class="topic-chip" style="--chip-color: {{ tag.color }};">{{ tag.name }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty-state">
+  <p>No journal entries yet.</p>
+  <p class="empty-hint">Send a voice memo from your iPhone, or click "New entry" above.</p>
+</div>
+{% endif %}
+
+<div id="journal-filter-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h2 class="modal-title">Journal Filters</h2>
+    <div class="filter-saved-row">
+      <select id="journal-saved-filters" class="modal-input" onchange="SavedFilters.apply('journal-saved-filters', '/')">
+        <option value="">Saved filters...</option>
+      </select>
+      <button class="btn-secondary" onclick="saveJournalFilter()">Save</button>
+    </div>
+    <div class="filter-date-row">
+      <label class="modal-label">From
+        <input type="date" id="journal-date-from" class="modal-input" value="{{ date_from }}">
+      </label>
+      <label class="modal-label">To
+        <input type="date" id="journal-date-to" class="modal-input" value="{{ date_to }}">
+      </label>
+    </div>
+    <div class="modal-label">Filter by tag</div>
+    <div class="filter-tag-section">
+      <div class="filter-tag-tabs">
+        <button class="filter-tab filter-tab--active" data-tab="topics" onclick="switchJournalFilterTab('topics')">Topics</button>
+        <button class="filter-tab" data-tab="entities" onclick="switchJournalFilterTab('entities')">Entities</button>
+      </div>
+      <input type="text" id="journal-filter-tag-search" class="modal-input" placeholder="Search tags..." autocomplete="off" oninput="TagFilterTree.search('journal-filter-tag-list', this.value)">
+      <div id="journal-filter-tag-list" class="filter-tag-list">
+        <div id="journal-filter-tab-topics" class="filter-tab-content">
+          {% for tag in topic_tree_tags %}
+          <label class="filter-tag-item {% if tag.depth > 0 %}filter-tag-item--child filter-tag-item--collapsed{% endif %}" data-parent-id="{{ tag.parent_tag_id or '' }}" style="--tag-depth: {{ tag.depth }}">
+            {% if tag.has_children %}
+            <button type="button" class="filter-tag-expand" data-tag-id="{{ tag.id }}" aria-expanded="false">▸</button>
+            {% else %}
+            <span class="filter-tag-spacer"></span>
+            {% endif %}
+            <input type="checkbox" value="{{ tag.id }}" {% if tag.id in active_tag_ids %}checked{% endif %}>
+            <span class="filter-tag-dot" style="background:{{ tag.color }}"></span>{{ tag.name }}
+          </label>
+          {% endfor %}
+        </div>
+        <div id="journal-filter-tab-entities" class="filter-tab-content hidden">
+          {% for ent in all_tags if ent.kind == 'entity' %}
+          <label class="filter-tag-item">
+            <span class="filter-tag-spacer"></span>
+            <input type="checkbox" value="{{ ent.id }}" {% if ent.id in active_tag_ids %}checked{% endif %}>
+            <span class="filter-tag-dot" style="background:{{ ent.color }}"></span>{{ ent.name }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeJournalFilter()">Cancel</button>
+      <button class="btn-save" onclick="applyJournalFilter()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- New entry modal -->
+<div id="new-entry-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide">
+    <h3>New entry</h3>
+    <label class="modal-label" for="new-entry-title">Title <span class="text-muted">(optional)</span></label>
+    <input type="text" id="new-entry-title" class="modal-input" placeholder="Entry title…">
+    <label class="modal-label" for="new-entry-content">Raw text</label>
+    <textarea id="new-entry-content" class="modal-textarea modal-textarea--entry" placeholder="Paste or type raw journal text..."></textarea>
+    <div class="modal-actions" style="margin-top: 16px;">
+      <button class="btn-secondary" onclick="closeNewEntry()">Cancel</button>
+      <button class="btn-save" id="new-entry-submit" onclick="submitNewEntry()">Save entry</button>
+    </div>
+  </div>
+</div>
+
+<!-- Guided journal modal -->
+<div id="guided-journal-modal" class="modal-overlay guided-overlay hidden">
+  <div class="modal-card modal-card--guided">
+    <div class="guided-topline">
+      <span id="guided-session-label">Guided Journal</span>
+      <span id="guided-step-label">Question 1</span>
+    </div>
+    <div class="guided-question" id="guided-question">What do you want this journaling session to help with?</div>
+    <textarea id="guided-answer" class="modal-textarea guided-textarea" placeholder="Write freely..." spellcheck="true"></textarea>
+    <div class="guided-playbooks" id="guided-playbooks">
+      <div class="guided-playbooks-label">Play Books</div>
+      <div class="guided-playbook-list" id="guided-playbook-list"></div>
+      <button class="btn-secondary guided-playbook-edit-btn" type="button" onclick="GuidedJournal.openPlaybookEditor()">Edit Play Books</button>
+    </div>
+    <div id="guided-recording" class="guided-recording hidden">
+      <div class="guided-record-panel">
+        <button type="button" class="guided-record-stop" onclick="GuidedJournal.stopRecording()" aria-label="Stop recording">
+          <span class="guided-record-level" aria-hidden="true"></span>
+          <span class="guided-record-icon" aria-hidden="true">&#127908;</span>
+        </button>
+        <div class="guided-record-caption" id="guided-record-caption">listening</div>
+        <div class="guided-record-hint" id="guided-record-hint">Tap when finished</div>
+        <div class="guided-waveform" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+    <div id="guided-status" class="guided-status"></div>
+    <div class="guided-actions">
+      <button class="btn-secondary" id="guided-exit" type="button" onclick="GuidedJournal.exit()">Exit</button>
+      <button class="btn-secondary guided-mic-btn" type="button" onclick="GuidedJournal.startRecording()" title="Record audio">&#127908;</button>
+      <button class="btn-save" id="guided-submit" type="button" onclick="GuidedJournal.submitAnswer()">Submit</button>
+      <button class="btn-secondary" id="guided-skip" type="button" onclick="GuidedJournal.skipQuestion()">You Choose</button>
+      <button class="btn-secondary" id="guided-done" type="button" onclick="GuidedJournal.done()">Done Journaling</button>
+    </div>
+  </div>
+</div>
+
+<div id="guided-playbook-modal" class="modal-overlay hidden">
+  <div class="modal-card modal-card--wide modal-card--playbooks">
+    <div class="guided-editor-header">
+      <h3>Play Books</h3>
+      <div class="guided-editor-header-actions">
+        <button class="btn-secondary" type="button" onclick="GuidedJournal.newPlaybook()">New Play Book</button>
+        <button class="btn-secondary" type="button" onclick="GuidedJournal.closePlaybookEditor()">Close</button>
+      </div>
+    </div>
+    <div class="guided-editor-layout">
+      <div id="guided-editor-list" class="guided-editor-list"></div>
+      <div class="guided-editor-form">
+        <input type="hidden" id="playbook-id">
+        <label class="modal-label">Title
+          <input type="text" id="playbook-title" class="modal-input" placeholder="Clear My Head">
+        </label>
+        <label class="modal-label">Description
+          <textarea id="playbook-description" class="modal-textarea guided-editor-description" rows="3"></textarea>
+        </label>
+        <label class="modal-label">Target questions
+          <input type="number" id="playbook-target" class="modal-input" min="1" max="12" value="5">
+        </label>
+        <div class="guided-editor-steps-header">
+          <span class="modal-label">Steps</span>
+          <button class="btn-secondary" type="button" onclick="GuidedJournal.addPlaybookStep()">Add Step</button>
+        </div>
+        <div id="playbook-steps" class="guided-editor-steps"></div>
+        <div id="playbook-editor-status" class="guided-status"></div>
+        <div class="modal-actions">
+          <button class="btn-secondary" type="button" onclick="GuidedJournal.closePlaybookEditor()">Close</button>
+          <button class="btn-secondary" id="playbook-duplicate" type="button" onclick="GuidedJournal.duplicatePlaybook()">Duplicate</button>
+          <button class="btn-secondary review-btn--danger" id="playbook-delete" type="button" onclick="GuidedJournal.deletePlaybook()">Delete</button>
+          <button class="btn-save" id="playbook-save" type="button" onclick="GuidedJournal.savePlaybook()">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openNewEntry() {
+  document.getElementById('new-entry-modal').classList.remove('hidden');
+  document.getElementById('new-entry-content').placeholder = 'Paste or type raw journal text...';
+  document.getElementById('new-entry-title').focus();
+}
+function openJournalFilter() {
+  document.getElementById('journal-filter-modal').classList.remove('hidden');
+  document.querySelectorAll('#journal-filter-tag-list .filter-tag-item--collapsed').forEach(item => {
+    item.style.display = 'none';
+  });
+  TagFilterTree.init('journal-filter-tag-list');
+  SavedFilters.load('journal', 'journal-saved-filters');
+}
+function closeJournalFilter() {
+  document.getElementById('journal-filter-modal').classList.add('hidden');
+}
+function journalFilterParams() {
+  const params = new URLSearchParams();
+  const from = document.getElementById('journal-date-from').value;
+  const to = document.getElementById('journal-date-to').value;
+  if (from) params.set('date_from', from);
+  if (to) params.set('date_to', to);
+  TagFilterTree.checkedParams('journal-filter-tag-list').forEach(id => params.append('tag', id));
+  return params;
+}
+function applyJournalFilter() {
+  const params = journalFilterParams();
+  window.location.href = '/' + (params.toString() ? '?' + params.toString() : '');
+}
+function saveJournalFilter() {
+  const params = journalFilterParams();
+  SavedFilters.save('journal', {
+    date_from: params.get('date_from') || '',
+    date_to: params.get('date_to') || '',
+    tag: params.getAll('tag'),
+  }, 'journal-saved-filters');
+}
+function switchJournalFilterTab(tab) {
+  document.querySelectorAll('#journal-filter-modal .filter-tab').forEach(btn => btn.classList.toggle('filter-tab--active', btn.dataset.tab === tab));
+  document.getElementById('journal-filter-tab-topics').classList.toggle('hidden', tab !== 'topics');
+  document.getElementById('journal-filter-tab-entities').classList.toggle('hidden', tab !== 'entities');
+}
+function closeNewEntry() {
+  document.getElementById('new-entry-modal').classList.add('hidden');
+}
+async function submitNewEntry() {
+  const title = document.getElementById('new-entry-title').value.trim();
+  const content = document.getElementById('new-entry-content').value.trim();
+  if (!content) return;
+  const btn = document.getElementById('new-entry-submit');
+  btn.disabled = true;
+  btn.textContent = 'Processing...';
+  try {
+    const r = await fetch('/api/entries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, content }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      window.location.href = `/entry/${data.entry_id}`;
+    } else {
+      alert(data.error || 'Failed to save entry');
+      btn.disabled = false;
+      btn.textContent = 'Save entry';
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Save entry';
+  }
+}
+document.getElementById('new-entry-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeNewEntry();
+});
+document.getElementById('journal-filter-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeJournalFilter();
+});
+
+window.GUIDED_PLAYBOOKS = {{ guided_playbooks | tojson }};
+
+const GuidedJournal = (function() {
+  const objectiveQuestion = 'What do you want this journaling session to help with?';
+  let objective = '';
+  let loggedAnswers = [];
+  let skippedQuestions = [];
+  let currentQuestion = objectiveQuestion;
+  let isObjective = true;
+  let state = 'objective';
+  let selectedPlaybookId = null;
+  let playbooks = Array.isArray(window.GUIDED_PLAYBOOKS) ? window.GUIDED_PLAYBOOKS : [];
+  let editingPlaybook = null;
+  let recorder = null;
+  let chunks = [];
+  let stream = null;
+  let cancelRecording = false;
+  let audioContext = null;
+  let analyser = null;
+  let audioFrame = null;
+
+  function modal() { return document.getElementById('guided-journal-modal'); }
+  function answerEl() { return document.getElementById('guided-answer'); }
+  function statusEl() { return document.getElementById('guided-status'); }
+  function selectedPlaybook() { return playbooks.find(p => p.id === selectedPlaybookId) || null; }
+
+  function setStatus(message, isError) {
+    const el = statusEl();
+    el.textContent = message || '';
+    el.classList.toggle('guided-status--error', !!isError);
+  }
+
+  function setState(nextState, message, isError) {
+    state = nextState;
+    modal().dataset.state = state;
+    if (message !== undefined) setStatus(message, isError);
+  }
+
+  function setBusy(busy) {
+    ['guided-submit', 'guided-skip', 'guided-done'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = busy;
+    });
+    const mic = document.querySelector('.guided-mic-btn');
+    if (mic) mic.disabled = busy;
+  }
+
+  function renderQuestion(question, objectiveMode) {
+    currentQuestion = question || objectiveQuestion;
+    isObjective = !!objectiveMode;
+    document.getElementById('guided-question').textContent = currentQuestion;
+    document.getElementById('guided-skip').textContent = isObjective ? 'You Choose' : 'Skip';
+    document.getElementById('guided-submit').textContent = isObjective ? 'Start' : 'Submit';
+    document.getElementById('guided-step-label').textContent = isObjective ? 'Objective' : `Question ${loggedAnswers.length + 1}`;
+    document.getElementById('guided-session-label').textContent = selectedPlaybook()?.title || 'Guided Journal';
+    document.getElementById('guided-playbooks').classList.toggle('hidden', !isObjective);
+    answerEl().value = '';
+    setState(isObjective ? 'objective' : 'idle', 'Type your answer or tap the mic to dictate.');
+    setTimeout(() => answerEl().focus(), 0);
+  }
+
+  function renderPlaybookChips() {
+    const list = document.getElementById('guided-playbook-list');
+    list.innerHTML = '';
+    playbooks.forEach(pb => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'guided-playbook-chip' + (pb.id === selectedPlaybookId ? ' guided-playbook-chip--active' : '');
+      btn.textContent = pb.title;
+      btn.title = pb.description || '';
+      btn.onclick = () => {
+        selectedPlaybookId = selectedPlaybookId === pb.id ? null : pb.id;
+        renderPlaybookChips();
+        document.getElementById('guided-session-label').textContent = selectedPlaybook()?.title || 'Guided Journal';
+      };
+      list.appendChild(btn);
+    });
+  }
+
+  async function nextQuestion() {
+    setBusy(true);
+    setState('generating_question', 'Finding the next helpful question...');
+    try {
+      const r = await fetch('/api/guided-journal/question', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          objective,
+          answers: loggedAnswers,
+          skipped_questions: skippedQuestions,
+          playbook_id: selectedPlaybookId,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.question) throw new Error(data.error || 'Failed to choose question');
+      renderQuestion(data.question, false);
+    } catch (e) {
+      setState('error', e.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function open() {
+    objective = '';
+    loggedAnswers = [];
+    skippedQuestions = [];
+    selectedPlaybookId = null;
+    hideRecording();
+    modal().classList.remove('hidden');
+    renderPlaybookChips();
+    renderQuestion(objectiveQuestion, true);
+  }
+
+  function close() {
+    cancelRecording = true;
+    if (recorder && recorder.state === 'recording') recorder.stop();
+    stopAudioFeedback();
+    stopStream();
+    setBusy(false);
+    setState('idle', '');
+    modal().classList.add('hidden');
+  }
+
+  function requestClose() {
+    if (modal().classList.contains('hidden')) return;
+    setStatus('Use Exit to discard this guided journal session.', true);
+  }
+
+  function exit() {
+    loggedAnswers = [];
+    skippedQuestions = [];
+    objective = '';
+    close();
+  }
+
+  async function submitAnswer() {
+    const answer = answerEl().value.trim();
+    if (!answer) {
+      setStatus('Write an answer first, or skip this question.', true);
+      return;
+    }
+    loggedAnswers.push({ question: currentQuestion, answer });
+    if (isObjective) objective = answer;
+    await nextQuestion();
+  }
+
+  async function skipQuestion() {
+    if (!isObjective) skippedQuestions.push(currentQuestion);
+    await nextQuestion();
+  }
+
+  function sessionText() {
+    const lines = ['Guided Journal', ''];
+    loggedAnswers.forEach(item => {
+      lines.push(item.question);
+      lines.push('');
+      lines.push(item.answer);
+      lines.push('');
+    });
+    return lines.join('\n').trim();
+  }
+
+  async function done() {
+    if (!loggedAnswers.length) {
+      close();
+      return;
+    }
+    setBusy(true);
+    setState('saving', 'Saving your guided journal entry...');
+    try {
+      const r = await fetch('/api/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Guided Journal', content: sessionText() }),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        window.location.href = `/entry/${data.entry_id}`;
+      } else {
+        throw new Error(data.error || 'Failed to save entry');
+      }
+    } catch (e) {
+      setStatus(e.message, true);
+      setBusy(false);
+    }
+  }
+
+  function showRecording() {
+    const isTouch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+    document.getElementById('guided-record-hint').textContent = isTouch ? 'Tap when finished' : 'Click when finished';
+    document.getElementById('guided-recording').classList.remove('hidden');
+    answerEl().classList.add('guided-textarea--recording');
+    setState('recording', 'Listening...');
+  }
+
+  function hideRecording() {
+    document.getElementById('guided-recording').classList.add('hidden');
+    answerEl().classList.remove('guided-textarea--recording');
+  }
+
+  function stopStream() {
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    stream = null;
+  }
+
+  function stopAudioFeedback() {
+    if (audioFrame) cancelAnimationFrame(audioFrame);
+    audioFrame = null;
+    analyser = null;
+    if (audioContext) audioContext.close().catch(() => {});
+    audioContext = null;
+    document.querySelectorAll('.guided-waveform span').forEach(bar => {
+      bar.style.setProperty('--level', '0.18');
+    });
+    document.documentElement.style.setProperty('--guided-audio-level', '0');
+  }
+
+  function startAudioFeedback(inputStream) {
+    stopAudioFeedback();
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    audioContext = new AudioContextClass();
+    const source = audioContext.createMediaStreamSource(inputStream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.72;
+    source.connect(analyser);
+
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const bars = Array.from(document.querySelectorAll('.guided-waveform span'));
+    function renderAudioLevel() {
+      if (!analyser) return;
+      analyser.getByteFrequencyData(data);
+      let total = 0;
+      for (let i = 0; i < data.length; i++) total += data[i];
+      const average = total / data.length / 255;
+      const level = Math.min(1, Math.max(0.04, average * 3.2));
+      document.documentElement.style.setProperty('--guided-audio-level', level.toFixed(3));
+      bars.forEach((bar, index) => {
+        const sampleIndex = Math.floor((index / Math.max(1, bars.length - 1)) * (data.length - 1));
+        const sample = Math.min(1, Math.max(0.12, (data[sampleIndex] / 255) * 2.7));
+        bar.style.setProperty('--level', sample.toFixed(3));
+      });
+      audioFrame = requestAnimationFrame(renderAudioLevel);
+    }
+    renderAudioLevel();
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      setStatus('Audio recording is not supported in this browser.', true);
+      return;
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      cancelRecording = false;
+      chunks = [];
+      const options = MediaRecorder.isTypeSupported('audio/webm') ? { mimeType: 'audio/webm' } : undefined;
+      recorder = new MediaRecorder(stream, options);
+      recorder.addEventListener('dataavailable', e => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      });
+      recorder.addEventListener('stop', transcribeRecording);
+      recorder.start();
+      startAudioFeedback(stream);
+      setBusy(true);
+      showRecording();
+    } catch (e) {
+      setStatus('Microphone permission was denied or unavailable.', true);
+    }
+  }
+
+  function stopRecording() {
+    if (recorder && recorder.state === 'recording') {
+      recorder.stop();
+    }
+  }
+
+  async function transcribeRecording() {
+    hideRecording();
+    if (cancelRecording) {
+      chunks = [];
+      setBusy(false);
+      return;
+    }
+    setState('transcribing', 'Transcribing your answer...');
+    stopAudioFeedback();
+    stopStream();
+    try {
+      const blob = new Blob(chunks, { type: recorder && recorder.mimeType ? recorder.mimeType : 'audio/webm' });
+      const form = new FormData();
+      form.append('audio', blob, 'guided-journal.webm');
+      const r = await fetch('/api/guided-journal/transcribe', { method: 'POST', body: form });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Transcription failed');
+      const existing = answerEl().value.trim();
+      answerEl().value = existing ? `${existing}\n\n${data.text || ''}` : (data.text || '');
+      setState('reviewing_answer', 'Transcript added. Edit anything you want, then submit.');
+      answerEl().focus();
+    } catch (e) {
+      setStatus(e.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function editorModal() { return document.getElementById('guided-playbook-modal'); }
+  function editorStatus(message, isError) {
+    const el = document.getElementById('playbook-editor-status');
+    el.textContent = message || '';
+    el.classList.toggle('guided-status--error', !!isError);
+  }
+  function stepForm(step = {}) {
+    const wrap = document.createElement('div');
+    wrap.className = 'guided-editor-step';
+    wrap.innerHTML = `
+      <input class="modal-input step-name" placeholder="Step name" value="">
+      <textarea class="modal-textarea step-purpose" rows="2" placeholder="Purpose"></textarea>
+      <textarea class="modal-textarea step-examples" rows="2" placeholder="Example questions, one per line"></textarea>
+      <button class="btn-secondary" type="button">Remove</button>
+    `;
+    wrap.querySelector('.step-name').value = step.name || '';
+    wrap.querySelector('.step-purpose').value = step.purpose || '';
+    wrap.querySelector('.step-examples').value = (step.examples || []).join('\n');
+    wrap.querySelector('button').onclick = () => wrap.remove();
+    return wrap;
+  }
+  function renderEditorList() {
+    const list = document.getElementById('guided-editor-list');
+    list.innerHTML = '';
+    playbooks.forEach(pb => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'guided-editor-list-item' + (editingPlaybook && editingPlaybook.id === pb.id ? ' guided-editor-list-item--active' : '');
+      btn.textContent = pb.title + (pb.is_builtin ? ' (built-in)' : '');
+      btn.onclick = () => loadEditor(pb);
+      list.appendChild(btn);
+    });
+  }
+  function loadEditor(pb) {
+    editingPlaybook = pb;
+    document.getElementById('playbook-id').value = pb.id || '';
+    document.getElementById('playbook-title').value = pb.title || '';
+    document.getElementById('playbook-description').value = pb.description || '';
+    document.getElementById('playbook-target').value = pb.target_question_count || 5;
+    const steps = document.getElementById('playbook-steps');
+    steps.innerHTML = '';
+    (pb.steps || []).forEach(step => steps.appendChild(stepForm(step)));
+    document.getElementById('playbook-save').disabled = !!pb.is_builtin;
+    document.getElementById('playbook-delete').disabled = !!pb.is_builtin;
+    document.getElementById('playbook-duplicate').disabled = false;
+    editorStatus(pb.is_builtin ? 'Built-in Play Books are read-only. Duplicate to customize.' : '');
+    renderEditorList();
+  }
+  async function refreshPlaybooks() {
+    const r = await fetch('/api/guided-journal/playbooks');
+    const data = await r.json();
+    playbooks = data.playbooks || [];
+    renderPlaybookChips();
+    renderEditorList();
+  }
+  function readEditorForm() {
+    const steps = Array.from(document.querySelectorAll('#playbook-steps .guided-editor-step')).map(step => ({
+      name: step.querySelector('.step-name').value.trim(),
+      purpose: step.querySelector('.step-purpose').value.trim(),
+      examples: step.querySelector('.step-examples').value.split('\n').map(s => s.trim()).filter(Boolean),
+    }));
+    return {
+      title: document.getElementById('playbook-title').value.trim(),
+      description: document.getElementById('playbook-description').value.trim(),
+      target_question_count: parseInt(document.getElementById('playbook-target').value || '5', 10),
+      steps,
+    };
+  }
+  async function openPlaybookEditor() {
+    editorModal().classList.remove('hidden');
+    await refreshPlaybooks();
+    loadEditor(playbooks.find(p => !p.is_builtin) || playbooks[0] || {});
+  }
+  function closePlaybookEditor() { editorModal().classList.add('hidden'); }
+  function newPlaybook() {
+    loadEditor({ id: '', title: '', description: '', target_question_count: 5, steps: [{ name: '', purpose: '', examples: [''] }] });
+    document.getElementById('playbook-save').disabled = false;
+    document.getElementById('playbook-delete').disabled = true;
+  }
+  function addPlaybookStep() { document.getElementById('playbook-steps').appendChild(stepForm()); }
+  async function savePlaybook() {
+    const id = document.getElementById('playbook-id').value;
+    const url = id ? `/api/guided-journal/playbooks/${encodeURIComponent(id)}` : '/api/guided-journal/playbooks';
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(readEditorForm()) });
+    const data = await r.json();
+    if (!r.ok) { editorStatus(data.error || 'Save failed', true); return; }
+    await refreshPlaybooks();
+    loadEditor(data.playbook);
+    editorStatus('Saved.');
+  }
+  async function duplicatePlaybook() {
+    const id = document.getElementById('playbook-id').value;
+    if (!id) return;
+    const r = await fetch(`/api/guided-journal/playbooks/${encodeURIComponent(id)}/duplicate`, { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) { editorStatus(data.error || 'Duplicate failed', true); return; }
+    await refreshPlaybooks();
+    loadEditor(data.playbook);
+  }
+  async function deletePlaybook() {
+    const id = document.getElementById('playbook-id').value;
+    if (!id || !confirm('Delete this Play Book?')) return;
+    const r = await fetch(`/api/guided-journal/playbooks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { editorStatus(data.error || 'Delete failed', true); return; }
+    await refreshPlaybooks();
+    loadEditor(playbooks[0] || {});
+  }
+
+  return {
+    open, close, submitAnswer, skipQuestion, done, startRecording, stopRecording,
+    exit, requestClose,
+    openPlaybookEditor, closePlaybookEditor, newPlaybook, addPlaybookStep,
+    savePlaybook, duplicatePlaybook, deletePlaybook,
+  };
+})();
+
+document.getElementById('guided-journal-modal').addEventListener('click', function(e) {
+  if (e.target === this) GuidedJournal.requestClose();
+});
+document.getElementById('guided-playbook-modal').addEventListener('click', function(e) {
+  if (e.target === this) GuidedJournal.closePlaybookEditor();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    closeNewEntry();
+    closeJournalFilter();
+    GuidedJournal.requestClose();
+  }
+});
+</script>
+{% endblock %}
