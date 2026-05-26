@@ -2106,57 +2106,50 @@ def api_decision_tags(item_id):
 # Trackers
 # ---------------------------------------------------------------------------
 
-def _tracker_field_task_link(data):
-    linked_task_id = (data.get("linked_task_id") or "").strip() or None
-    new_task = data.get("recurring_task") or {}
-    title = (new_task.get("title") or data.get("create_recurring_task_title") or "").strip()
-    rule = (new_task.get("recurrence_rule") or data.get("create_recurring_task_rule") or "").strip()
-    if title and rule:
-        linked_task_id = tasks_db.create_task(
-            uid(),
-            title=title,
-            status="open",
-            source="tracker",
-            recurrence_rule=rule,
-        )
-    return linked_task_id
-
-
 @app.route("/trackers")
 def trackers_list():
     if not logged_in():
         return redirect(url_for("login"))
-    TRACKER_HUES = [
-        "oklch(58% 0.13 145)",   # sage green
-        "oklch(60% 0.11 230)",   # dusty blue
-        "oklch(58% 0.16 30)",    # warm coral
-    ]
-    all_trackers = trackers_db.list_trackers(uid())
-    for i, t in enumerate(all_trackers):
-        t["hue"] = TRACKER_HUES[i % len(TRACKER_HUES)]
-        fields = trackers_db.list_fields(t["id"])
-        t["field_count"] = len(fields)
-        rows = trackers_db.list_rows(uid(), t["id"], limit=90)
-        t["row_count"] = len(rows)
-        t["tags"] = trackers_db.get_tags_for_tracker(t["id"])
-        # Build heatmap data (oldest first, for JS rendering)
-        row_ids = [r["id"] for r in rows]
-        vals = trackers_db.get_values_for_rows(row_ids) if row_ids else {}
-        t["heatmap_data"] = json.dumps([
-            {"date": r["period_start"], "has_data": bool(vals.get(r["id"]))}
-            for r in reversed(rows)
-        ])
-        # Compute open question count
-        t["open_questions"] = len(trackers_db.list_open_questions(uid(), t["id"]))
-    all_tags = topics.list_all_tags(uid())
     tz = user_tz()
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    all_trackers = trackers_db.list_trackers(uid())
+    for t in all_trackers:
+        entries = trackers_db.list_entries(uid(), t["id"], limit=31)
+        t["entries_json"] = json.dumps([
+            {"date": e["entry_date"], "value": json.loads(e["value_json"]) if e["value_json"] is not None else None}
+            for e in entries
+        ])
+        commentary = trackers_db.get_commentary(uid(), t["id"])
+        t["commentary"] = commentary["commentary"] if commentary else None
+    pending_count = len(trackers_db.list_pending_snapshots(uid(), today))
     return render_template(
         "trackers.html",
         trackers=all_trackers,
-        all_tags=all_tags,
-        user_timezone=tz.key,
-        current_date=datetime.now(tz).strftime("%Y-%m-%d"),
+        today=today,
+        pending_count=pending_count,
     )
+
+
+@app.route("/trackers/new")
+def tracker_create_page():
+    if not logged_in():
+        return redirect(url_for("login"))
+    return render_template("tracker_create.html")
+
+
+@app.route("/trackers/snapshots")
+def tracker_snapshots_page():
+    if not logged_in():
+        return redirect(url_for("login"))
+    tz = user_tz()
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    snapshots = trackers_db.list_pending_snapshots(uid(), today)
+    # Group by date
+    from itertools import groupby
+    grouped = []
+    for date, group in groupby(snapshots, key=lambda s: s["entry_date"]):
+        grouped.append({"date": date, "entries": list(group)})
+    return render_template("tracker_snapshots.html", grouped=grouped, today=today)
 
 
 @app.route("/trackers/<tracker_id>")
@@ -2166,81 +2159,37 @@ def tracker_detail_page(tracker_id):
     tracker = trackers_db.get_tracker(uid(), tracker_id)
     if not tracker:
         return redirect(url_for("trackers_list"))
-    fields = trackers_db.list_fields(tracker_id)
-    rows = trackers_db.list_rows(uid(), tracker_id, limit=120)
-    row_ids = [r["id"] for r in rows]
-    values_map = trackers_db.get_values_for_rows(row_ids)
-    questions = trackers_db.list_open_questions(uid(), tracker_id)
-    tags = trackers_db.get_tags_for_tracker(tracker_id)
-    all_tags = topics.list_all_tags(uid())
-    recurring_tasks = tasks_db.list_recurring_task_options(uid())
     tz = user_tz()
-    today_str = datetime.now(tz).strftime("%Y-%m-%d")
-    # Ensure today's row exists for the log strip
-    today_row = None
-    today_values = {}
-    try:
-        period_start, period_end = trackers_db.derive_period_bounds(today_str, tracker["cadence"])
-        today_row = trackers_db.get_or_create_row(uid(), tracker_id, period_start, period_end)
-        today_values = trackers_db.get_values_for_row(today_row["id"])
-    except Exception:
-        pass
-    # Assign tracker hue by position in list
-    TRACKER_HUES = [
-        "oklch(58% 0.13 145)",
-        "oklch(60% 0.11 230)",
-        "oklch(58% 0.16 30)",
-    ]
-    all_tracker_ids = [t["id"] for t in trackers_db.list_trackers(uid())]
-    tracker_idx = all_tracker_ids.index(tracker_id) if tracker_id in all_tracker_ids else 0
-    tracker_hue = TRACKER_HUES[tracker_idx % len(TRACKER_HUES)]
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    # Default range: last 30 days
+    date_from = request.args.get("from") or (datetime.now(tz) - timedelta(days=29)).strftime("%Y-%m-%d")
+    date_to = request.args.get("to") or today
+    entries = trackers_db.list_entries(uid(), tracker_id, date_from=date_from, date_to=date_to)
+    commentary = trackers_db.get_commentary(uid(), tracker_id)
+    # Refresh commentary if stale
+    if tracker.get("ai_commentary_instructions") and trackers_db.commentary_is_stale(tracker_id, uid()):
+        try:
+            llm_service.ai_tracker_commentary(uid(), tracker_id)
+            commentary = trackers_db.get_commentary(uid(), tracker_id)
+        except Exception:
+            pass
     return render_template(
         "tracker_detail.html",
         tracker=tracker,
-        fields=fields,
-        rows=rows,
-        values_map=values_map,
-        questions=questions,
-        tags=tags,
-        all_tags=all_tags,
-        recurring_tasks=recurring_tasks,
-        user_timezone=tz.key,
-        current_date=today_str,
-        today_row=today_row,
-        today_values=today_values,
-        tracker_hue=tracker_hue,
+        entries=entries,
+        entries_json=json.dumps([
+            {"date": e["entry_date"], "value": json.loads(e["value_json"]) if e["value_json"] is not None else None,
+             "skipped": bool(e["skipped"]), "id": e["id"]}
+            for e in entries
+        ]),
+        commentary=commentary,
+        today=today,
+        date_from=date_from,
+        date_to=date_to,
     )
 
 
-@app.route("/trackers/<tracker_id>.csv")
-def tracker_csv(tracker_id):
-    if not logged_in():
-        return redirect(url_for("login"))
-    filename, csv_content = trackers_db.build_csv(uid(), tracker_id)
-    if not csv_content:
-        return jsonify({"error": "not found"}), 404
-    return Response(
-        csv_content,
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
-
-
-@app.route("/api/trackers/propose", methods=["POST"])
-def api_trackers_propose():
-    if not logged_in():
-        return jsonify({"error": "unauthorized"}), 401
-    data = request.get_json(silent=True) or {}
-    request_text = (data.get("request") or "").strip()
-    if not request_text:
-        return jsonify({"error": "request text required"}), 400
-    try:
-        proposal = llm_service.propose_tracker_schema(uid(), request_text)
-    except Exception as e:
-        logger.exception("Tracker schema proposal failed")
-        return jsonify({"error": "AI proposal failed"}), 500
-    return jsonify(proposal)
-
+# API ---
 
 @app.route("/api/trackers", methods=["GET", "POST"])
 def api_trackers():
@@ -2250,48 +2199,34 @@ def api_trackers():
         return jsonify({"trackers": trackers_db.list_trackers(uid())})
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
+    tracker_type = (data.get("type") or "yes_no").strip()
+    frequency = (data.get("frequency") or "Daily").strip()
     if not name:
         return jsonify({"error": "name required"}), 400
     try:
+        cron_expression = llm_service.ai_translate_frequency(frequency, uid())
         tracker_id = trackers_db.create_tracker(
             uid(),
             name=name,
-            description=data.get("description"),
-            cadence=data.get("cadence", "daily"),
-            timezone_str=data.get("timezone") or user_tz().key,
-            start_date=data.get("start_date"),
+            type=tracker_type,
+            frequency=frequency,
+            cron_expression=cron_expression,
+            capture_instructions=data.get("capture_instructions"),
+            ai_commentary_instructions=data.get("ai_commentary_instructions"),
         )
-        tag_ids = data.get("tag_ids") or []
-        if tag_ids:
-            trackers_db.tag_tracker(uid(), tracker_id, tag_ids)
-        # Create any fields included in the payload (from AI proposal flow)
-        for i, f in enumerate(data.get("fields") or []):
-            field_name = (f.get("name") or "").strip()
-            field_key = (f.get("field_key") or "").strip()
-            field_type = (f.get("field_type") or "text").strip()
-            if not field_name or not field_key:
-                continue
-            options_json = json.dumps(f["options"]) if f.get("options") else None
-            linked_task_id = _tracker_field_task_link(f)
-            trackers_db.add_field(
-                uid(), tracker_id,
-                name=field_name,
-                field_key=field_key,
-                field_type=field_type,
-                description=f.get("description"),
-                required=bool(f.get("required", False)),
-                options_json=options_json,
-                unit=f.get("unit"),
-                min_value=f.get("min_value"),
-                max_value=f.get("max_value"),
-                inference_policy=f.get("inference_policy", "ask_if_missing"),
-                sort_order=i,
-                ai_explanation=f.get("ai_explanation"),
-                linked_task_id=linked_task_id,
-            )
-    except (trackers_db.TrackerValidationError, ValueError, json.JSONDecodeError) as e:
+    except trackers_db.TrackerError as e:
         return _json_validation_error(e)
     return jsonify({"id": tracker_id}), 201
+
+
+@app.route("/api/trackers/reorder", methods=["POST"])
+def api_trackers_reorder():
+    if not logged_in():
+        return jsonify({"error": "unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    order = data.get("order") or []
+    trackers_db.reorder_trackers(uid(), order)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/trackers/<tracker_id>", methods=["GET", "PATCH", "DELETE"])
@@ -2302,191 +2237,101 @@ def api_tracker_detail(tracker_id):
     if not tracker:
         return jsonify({"error": "not found"}), 404
     if request.method == "GET":
-        tracker["fields"] = trackers_db.list_fields(tracker_id)
-        tracker["tags"] = trackers_db.get_tags_for_tracker(tracker_id)
         return jsonify(tracker)
     if request.method == "DELETE":
         trackers_db.archive_tracker(uid(), tracker_id)
         return jsonify({"ok": True})
     data = request.get_json(silent=True) or {}
+    # If frequency changed, re-translate cron
+    if "frequency" in data and data["frequency"] != tracker.get("frequency"):
+        data["cron_expression"] = llm_service.ai_translate_frequency(data["frequency"], uid())
     try:
         trackers_db.update_tracker(uid(), tracker_id, **data)
-    except trackers_db.TrackerValidationError as e:
+    except trackers_db.TrackerError as e:
         return _json_validation_error(e)
     return jsonify({"ok": True})
 
 
-@app.route("/api/trackers/<tracker_id>/fields", methods=["GET", "POST"])
-def api_tracker_fields(tracker_id):
+@app.route("/api/trackers/<tracker_id>/entries", methods=["GET", "POST"])
+def api_tracker_entries(tracker_id):
     if not logged_in():
         return jsonify({"error": "unauthorized"}), 401
     if not trackers_db.get_tracker(uid(), tracker_id):
         return jsonify({"error": "not found"}), 404
     if request.method == "GET":
-        return jsonify({"fields": trackers_db.list_fields(tracker_id)})
+        date_from = request.args.get("from")
+        date_to = request.args.get("to")
+        entries = trackers_db.list_entries(uid(), tracker_id, date_from=date_from, date_to=date_to)
+        return jsonify({"entries": entries})
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
-    field_key = (data.get("field_key") or "").strip()
-    field_type = (data.get("field_type") or "").strip()
-    if not name or not field_key or not field_type:
-        return jsonify({"error": "name, field_key, and field_type required"}), 400
-    try:
-        linked_task_id = _tracker_field_task_link(data)
-        field_id = trackers_db.add_field(
-            uid(), tracker_id, name, field_key, field_type,
-            description=data.get("description"),
-            required=data.get("required", False),
-            options_json=json.dumps(data["options"]) if data.get("options") else None,
-            unit=data.get("unit"),
-            min_value=data.get("min_value"),
-            max_value=data.get("max_value"),
-            inference_policy=data.get("inference_policy", "ask_if_missing"),
-            sort_order=data.get("sort_order", 0),
-            ai_explanation=data.get("ai_explanation"),
-            linked_task_id=linked_task_id,
-        )
-    except (trackers_db.TrackerValidationError, ValueError, json.JSONDecodeError) as e:
-        return _json_validation_error(e)
-    return jsonify({"id": field_id}), 201
+    entry_date = (data.get("entry_date") or "").strip()
+    if not entry_date:
+        return jsonify({"error": "entry_date required"}), 400
+    raw_value = data.get("value")
+    value_json = json.dumps(raw_value) if raw_value is not None else None
+    eid = trackers_db.upsert_entry(uid(), tracker_id, entry_date, value_json)
+    return jsonify({"id": eid}), 201
 
 
-@app.route("/api/trackers/<tracker_id>/fields/<field_id>", methods=["PATCH", "DELETE"])
-def api_tracker_field_detail(tracker_id, field_id):
+@app.route("/api/trackers/<tracker_id>/entries/<entry_id>", methods=["PATCH"])
+def api_tracker_entry_update(tracker_id, entry_id):
     if not logged_in():
         return jsonify({"error": "unauthorized"}), 401
-    field = trackers_db.get_field(uid(), field_id)
-    if not field or field["tracker_id"] != tracker_id:
+    entry = trackers_db.get_entry(uid(), entry_id)
+    if not entry or entry["tracker_id"] != tracker_id:
         return jsonify({"error": "not found"}), 404
-    if request.method == "DELETE":
-        trackers_db.delete_field(uid(), field_id)
-        return jsonify({"ok": True})
     data = request.get_json(silent=True) or {}
-    try:
-        trackers_db.update_field(uid(), field_id, **data)
-    except (trackers_db.TrackerValidationError, ValueError, json.JSONDecodeError) as e:
-        return _json_validation_error(e)
+    raw_value = data.get("value")
+    value_json = json.dumps(raw_value) if raw_value is not None else None
+    trackers_db.update_entry(uid(), entry_id, value_json)
     return jsonify({"ok": True})
 
 
-@app.route("/api/trackers/<tracker_id>/rows", methods=["GET", "POST"])
-def api_tracker_rows(tracker_id):
+@app.route("/api/trackers/<tracker_id>/entries/<entry_id>/skip", methods=["POST"])
+def api_tracker_entry_skip(tracker_id, entry_id):
     if not logged_in():
         return jsonify({"error": "unauthorized"}), 401
-    if not trackers_db.get_tracker(uid(), tracker_id):
+    entry = trackers_db.get_entry(uid(), entry_id)
+    if not entry or entry["tracker_id"] != tracker_id:
         return jsonify({"error": "not found"}), 404
-    if request.method == "GET":
-        rows = trackers_db.list_rows(uid(), tracker_id)
-        return jsonify({"rows": rows})
-    data = request.get_json(silent=True) or {}
+    trackers_db.skip_entry(uid(), entry_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/trackers/snapshots", methods=["GET"])
+def api_trackers_snapshots():
+    if not logged_in():
+        return jsonify({"error": "unauthorized"}), 401
+    tz = user_tz()
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    snapshots = trackers_db.list_pending_snapshots(uid(), today)
+    return jsonify({"snapshots": snapshots})
+
+
+@app.route("/api/trackers/<tracker_id>/commentary", methods=["GET"])
+def api_tracker_commentary(tracker_id):
+    if not logged_in():
+        return jsonify({"error": "unauthorized"}), 401
     tracker = trackers_db.get_tracker(uid(), tracker_id)
     if not tracker:
         return jsonify({"error": "not found"}), 404
-    date_str = data.get("date")
-    if date_str:
+    refresh = request.args.get("refresh") == "1"
+    if refresh or trackers_db.commentary_is_stale(tracker_id, uid()):
         try:
-            period_start, period_end = trackers_db.derive_period_bounds(date_str, tracker["cadence"])
-        except (trackers_db.TrackerValidationError, ValueError) as e:
-            return _json_validation_error(e)
-    else:
-        period_start = data.get("period_start")
-        period_end = data.get("period_end")
-    if not period_start or not period_end:
-        return jsonify({"error": "date or period_start and period_end required"}), 400
-    try:
-        row = trackers_db.get_or_create_row(uid(), tracker_id, period_start, period_end)
-    except trackers_db.TrackerValidationError as e:
-        return _json_validation_error(e)
-    return jsonify(row), 201
+            llm_service.ai_tracker_commentary(uid(), tracker_id)
+        except Exception:
+            logger.exception("Commentary generation failed for tracker %s", tracker_id)
+    commentary = trackers_db.get_commentary(uid(), tracker_id)
+    return jsonify({"commentary": commentary})
 
 
-@app.route("/api/trackers/<tracker_id>/rows/<row_id>", methods=["PATCH"])
-def api_tracker_row_update(tracker_id, row_id):
-    if not logged_in():
-        return jsonify({"error": "unauthorized"}), 401
-    row = trackers_db.get_row(uid(), row_id)
-    if not row or row["tracker_id"] != tracker_id:
-        return jsonify({"error": "not found"}), 404
-    data = request.get_json(silent=True) or {}
-    # data is {field_id: raw_value, ...}
-    for field_id, raw_value in data.items():
-        if field_id.startswith("_"):
-            continue  # skip meta keys
-        field = trackers_db.get_field(uid(), field_id)
-        if not field or field["tracker_id"] != tracker_id:
-            return jsonify({"error": f"field {field_id} not found for tracker"}), 400
-        try:
-            value = trackers_db.coerce_value_for_field(field, raw_value)
-            trackers_db.set_value(
-                uid(), row_id, field_id,
-                json.dumps(value),
-                source="manual",
-                confidence="user_confirmed",
-            )
-        except (trackers_db.TrackerValidationError, ValueError, json.JSONDecodeError) as e:
-            return _json_validation_error(e)
-    return jsonify({"ok": True})
-
-
-@app.route("/api/tracker-questions", methods=["GET"])
-def api_tracker_questions():
-    if not logged_in():
-        return jsonify({"error": "unauthorized"}), 401
-    tracker_id = request.args.get("tracker_id")
-    questions = trackers_db.list_open_questions(uid(), tracker_id=tracker_id)
-    return jsonify({"questions": questions})
-
-
-@app.route("/api/tracker-questions/<question_id>/answer", methods=["POST"])
-def api_tracker_question_answer(question_id):
-    if not logged_in():
-        return jsonify({"error": "unauthorized"}), 401
-    question = trackers_db.get_question(uid(), question_id)
-    if not question:
-        return jsonify({"error": "not found"}), 404
-    data = request.get_json(silent=True) or {}
-    if "value" in data and question.get("row_id") and question.get("field_id"):
-        field = trackers_db.get_field(uid(), question["field_id"])
-        row = trackers_db.get_row(uid(), question["row_id"])
-        if not field or not row or field["tracker_id"] != question["tracker_id"] or row["tracker_id"] != question["tracker_id"]:
-            return jsonify({"error": "question is not linked to a valid tracker field"}), 400
-        try:
-            value = trackers_db.coerce_value_for_field(field, data.get("value"))
-            trackers_db.set_value(
-                uid(), question["row_id"], question["field_id"],
-                json.dumps(value),
-                source="manual",
-                confidence="user_confirmed",
-            )
-        except (trackers_db.TrackerValidationError, ValueError, json.JSONDecodeError) as e:
-            return _json_validation_error(e)
-        trackers_db.answer_question(uid(), question_id)
-        return jsonify({"ok": True, "row_id": question["row_id"], "field_id": question["field_id"]})
-    trackers_db.answer_question(uid(), question_id)
-    return jsonify({"ok": True})
-
-
-@app.route("/api/tracker-questions/<question_id>/dismiss", methods=["POST"])
-def api_tracker_question_dismiss(question_id):
-    if not logged_in():
-        return jsonify({"error": "unauthorized"}), 401
-    trackers_db.dismiss_question(uid(), question_id)
-    return jsonify({"ok": True})
-
-
-@app.route("/api/trackers/cron", methods=["POST"])
-def api_trackers_cron():
+@app.route("/api/trackers/capture", methods=["POST"])
+def api_trackers_capture():
     if not logged_in():
         return jsonify({"error": "unauthorized"}), 401
     data = request.get_json(silent=True) or {}
     as_of_date = data.get("as_of_date") or datetime.now(user_tz()).strftime("%Y-%m-%d")
     return jsonify(llm_service.run_tracker_cron(uid(), as_of_date))
-
-
-@app.route("/api/tasks/recurring", methods=["GET"])
-def api_tasks_recurring():
-    if not logged_in():
-        return jsonify({"error": "unauthorized"}), 401
-    return jsonify({"tasks": tasks_db.list_recurring_task_options(uid())})
 
 
 # ---------------------------------------------------------------------------

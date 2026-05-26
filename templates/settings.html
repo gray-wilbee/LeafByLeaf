@@ -45,6 +45,36 @@
   </div>
 
   <div class="settings-section">
+    <h2>Trackers</h2>
+    <p class="section-desc">Configure when tracker entries are automatically captured from your journal.</p>
+    <div class="settings-field">
+      <div class="settings-field-header">
+        <label for="input-tracker_eval_time">Evaluate trackers at</label>
+        <span class="settings-saved-badge" id="badge-tracker_eval_time" style="display:none">Saved</span>
+      </div>
+      <p class="settings-help">Time of day when the cron job evaluates and captures tracker entries (24h format).</p>
+      <input type="time" id="input-tracker_eval_time" data-key="tracker_eval_time"
+             class="settings-input"
+             value="{{ current.get('tracker_eval_time', '00:00') }}">
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-header">
+        <label for="input-tracker_capture_day">Capture day</label>
+        <span class="settings-saved-badge" id="badge-tracker_capture_day" style="display:none">Saved</span>
+      </div>
+      <p class="settings-help">Whether the cron captures the previous day's data or the current day's data.</p>
+      <select id="input-tracker_capture_day" data-key="tracker_capture_day" class="settings-select">
+        <option value="previous" {% if current.get('tracker_capture_day', 'previous') == 'previous' %}selected{% endif %}>Previous day (default — evaluate yesterday at midnight)</option>
+        <option value="same" {% if current.get('tracker_capture_day') == 'same' %}selected{% endif %}>Same day (evaluate today)</option>
+      </select>
+    </div>
+    <div class="settings-actions">
+      <button class="btn-primary" onclick="Settings.save()">Save changes</button>
+      <span class="settings-status" id="tracker-settings-status"></span>
+    </div>
+  </div>
+
+  <div class="settings-section">
     <h2>API Key</h2>
     <p class="section-desc">Use this key in your iOS Shortcut or other integrations to upload entries.</p>
     <div class="settings-field">

@@ -399,6 +399,22 @@ def count_recurring_completions(user_id, root_task_id, period_start, period_end)
     return int(row["cnt"] or 0)
 
 
+def list_completed_in_range(user_id: int, date_from: str, date_to: str) -> list[dict]:
+    """Return tasks completed within a date range."""
+    with db.get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, title, completed_at FROM tasks
+               WHERE user_id=? AND status='done'
+                 AND completed_at IS NOT NULL
+                 AND soft_deleted=0
+                 AND substr(completed_at, 1, 10) >= ?
+                 AND substr(completed_at, 1, 10) <= ?
+               ORDER BY completed_at ASC""",
+            (user_id, date_from, date_to),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_recurring_task_options(user_id):
     """Return recurring tasks that can be linked to tracker fields."""
     with db.get_db() as conn:

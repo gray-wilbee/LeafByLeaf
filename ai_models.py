@@ -118,8 +118,9 @@ AI_FUNCTIONS: dict[str, dict[str, str]] = {
     "topic_description":  {"label": "Topic description",              "bucket": "lite"},
     "intake_summary":     {"label": "Intake summary",                 "bucket": "lite"},
     "decision_extraction": {"label": "Decision Log extraction",        "bucket": "lite"},
-    "tracker_schema_proposal": {"label": "Tracker schema proposal",    "bucket": "lite"},
-    "tracker_inference":  {"label": "Tracker inference",              "bucket": "lite"},
+    "tracker_capture":    {"label": "Tracker capture",                 "bucket": "regular"},
+    "tracker_commentary": {"label": "Tracker AI commentary",           "bucket": "regular"},
+    "tracker_frequency":  {"label": "Tracker frequency → cron",       "bucket": "lite"},
 }
 
 

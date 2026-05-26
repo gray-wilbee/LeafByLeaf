@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}New tracker — Leaf by Leaf{% endblock %}
+
+{% block content %}
+<div class="tc-page">
+  <div class="tc-header">
+    <a href="{{ url_for('trackers_list') }}" class="tc-back">← Trackers</a>
+    <h1 class="tc-title">New tracker</h1>
+  </div>
+
+  <form class="tc-form" id="createForm" onsubmit="Create.submit(event)">
+    <div class="tc-field">
+      <label class="tc-label" for="tc-name">Name</label>
+      <input class="tc-input" id="tc-name" name="name" type="text"
+             placeholder="e.g. Daily mood, Steps walked, Evening reflection"
+             autocomplete="off" required autofocus>
+    </div>
+
+    <div class="tc-field">
+      <label class="tc-label">Type</label>
+      <div class="tc-type-toggle" role="group" id="typeToggle">
+        <button type="button" class="tc-type-btn tc-type-btn--active" data-value="yes_no" onclick="Create.setType(this)">Yes / No</button>
+        <button type="button" class="tc-type-btn" data-value="number" onclick="Create.setType(this)">Number</button>
+        <button type="button" class="tc-type-btn" data-value="text" onclick="Create.setType(this)">Text</button>
+      </div>
+      <input type="hidden" id="tc-type" name="type" value="yes_no">
+    </div>
+
+    <div class="tc-field">
+      <label class="tc-label" for="tc-frequency">Frequency</label>
+      <input class="tc-input" id="tc-frequency" name="frequency" type="text"
+             value="Daily"
+             placeholder="e.g. Daily, Every workday, Weekly on Monday">
+      <p class="tc-hint">AI will translate this into a schedule automatically.</p>
+    </div>
+
+    <div class="tc-field tc-optional-field" id="field-capture">
+      <button type="button" class="tc-optional-toggle" onclick="Create.toggleOptional('capture')">
+        <span class="tc-optional-icon" id="icon-capture">+</span>
+        Special instructions <span class="tc-optional-note">(optional)</span>
+      </button>
+      <div class="tc-optional-body" id="body-capture" hidden>
+        <label class="tc-label" for="tc-capture">Capture instructions</label>
+        <textarea class="tc-textarea" id="tc-capture" name="capture_instructions" rows="4"
+          placeholder="Tell the AI what to look for in your journal entries when auto-capturing this tracker. E.g. 'Track whether I exercised — look for any mention of a workout, run, or physical activity.'"></textarea>
+      </div>
+    </div>
+
+    <div class="tc-field tc-optional-field" id="field-commentary">
+      <button type="button" class="tc-optional-toggle" onclick="Create.toggleOptional('commentary')">
+        <span class="tc-optional-icon" id="icon-commentary">+</span>
+        AI commentary instructions <span class="tc-optional-note">(optional)</span>
+      </button>
+      <div class="tc-optional-body" id="body-commentary" hidden>
+        <label class="tc-label" for="tc-commentary">Commentary instructions</label>
+        <textarea class="tc-textarea" id="tc-commentary" name="ai_commentary_instructions" rows="4"
+          placeholder="Tell the AI what kind of commentary to write about this tracker. E.g. 'Note any trends in the past two weeks and flag if I've missed more than 3 days.'"></textarea>
+      </div>
+    </div>
+
+    <div class="tc-actions">
+      <button type="submit" class="btn-primary" id="tc-submit">Create tracker</button>
+      <a href="{{ url_for('trackers_list') }}" class="btn-secondary">Cancel</a>
+      <span class="tc-status" id="tc-status"></span>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const Create = {
+  setType(btn) {
+    document.querySelectorAll('.tc-type-btn').forEach(b => b.classList.remove('tc-type-btn--active'));
+    btn.classList.add('tc-type-btn--active');
+    document.getElementById('tc-type').value = btn.dataset.value;
+  },
+
+  toggleOptional(key) {
+    const body = document.getElementById('body-' + key);
+    const icon = document.getElementById('icon-' + key);
+    const hidden = body.hidden;
+    body.hidden = !hidden;
+    icon.textContent = hidden ? '−' : '+';
+  },
+
+  submit(e) {
+    e.preventDefault();
+    const btn = document.getElementById('tc-submit');
+    const status = document.getElementById('tc-status');
+    btn.disabled = true;
+    btn.textContent = 'Creating…';
+    status.textContent = '';
+
+    const payload = {
+      name: document.getElementById('tc-name').value.trim(),
+      type: document.getElementById('tc-type').value,
+      frequency: document.getElementById('tc-frequency').value.trim() || 'Daily',
+      capture_instructions: document.getElementById('tc-capture').value.trim() || null,
+      ai_commentary_instructions: document.getElementById('tc-commentary').value.trim() || null,
+    };
+
+    fetch('/api/trackers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.id) {
+          window.location.href = '/trackers/' + data.id;
+        } else {
+          status.textContent = data.error || 'Error creating tracker.';
+          btn.disabled = false;
+          btn.textContent = 'Create tracker';
+        }
+      })
+      .catch(() => {
+        status.textContent = 'Network error.';
+        btn.disabled = false;
+        btn.textContent = 'Create tracker';
+      });
+  },
+};
+</script>
+{% endblock %}

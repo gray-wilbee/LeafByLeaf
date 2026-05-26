@@ -1359,382 +1359,175 @@ def extract_decision_log_items(user_id: int, entry_id: str, date_str: str,
     return extraction_items
 
 
-def propose_tracker_schema(user_id: int, natural_language_request: str) -> dict:
-    """Ask the LLM to propose a tracker schema from a plain-language description.
-    Returns a dict with name, description, cadence, and fields list."""
-    result_text = _ai_text_call(
-        system=(
-            "You are a tracker schema designer. "
-            "Given a plain-language description of what someone wants to track, "
-            "propose a clean, minimal tracker schema."
-        ),
-        user=(
-            f"The user wants to track: {natural_language_request}\n\n"
-            "Return JSON only (no markdown wrapper):\n"
-            '{"name": "short tracker name", '
-            '"description": "one sentence description", '
-            '"cadence": "daily or weekly or monthly", '
-            '"fields": [{'
-            '"name": "human-readable field name", '
-            '"field_key": "snake_case_key", '
-            '"field_type": "boolean or number or text or scale or time or duration or select or multi_select", '
-            '"description": "optional — what this field captures", '
-            '"ai_explanation": "optional guidance explaining how the AI should populate this field", '
-            '"required": true or false, '
-            '"unit": "unit string or null", '
-            '"min_value": number or null, '
-            '"max_value": number or null, '
-            '"options": ["option1", "option2"] or null, '
-            '"recurring_task": {"title": "task title", "recurrence_rule": "daily/weekly/etc"} or null, '
-            '"inference_policy": "manual_only or infer_when_explicit or infer_when_likely or system_computed or ask_if_missing"'
-            "}]}\n\n"
-            "Rules:\n"
-            "- Keep the schema minimal. Only include fields clearly implied by the request.\n"
-            "- Use boolean for yes/no habits. Use scale (1-10) for subjective ratings. "
-            "Use number for measurable quantities.\n"
-            "- For a yes/no habit that is better represented as a recurring task, include recurring_task. "
-            "For weekly/monthly trackers, use a number field when the useful value is how many times "
-            "that recurring task was completed in the period.\n"
-            "- ai_explanation should tell a future AI agent exactly when to infer the value and when "
-            "to ask the user for explicit confirmation.\n"
-            "- inference_policy: use 'infer_when_explicit' for fields the user might mention "
-            "explicitly in a journal entry (e.g. 'I drank two beers'); "
-            "use 'ask_if_missing' for fields that are unlikely to be journaled; "
-            "use 'system_computed' only for data derivable from app activity (e.g. had_journal_entry).\n"
-            "- field_key must be snake_case, unique within the tracker, no spaces.\n"
-            "- Return at most 8 fields.\n"
-            "- cadence: choose based on the natural tracking period implied by the request."
-        ),
-        bucket="lite",
-        max_tokens=1500,
-        user_id=user_id,
-        timeout=60,
-        func_key="tracker_schema_proposal",
-    )
-    if result_text.startswith("```"):
-        result_text = result_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    return json.loads(result_text)
+def ai_translate_frequency(frequency_text: str, user_id: int) -> str:
+    """Convert a natural language frequency description to a cron expression.
+    Returns a 5-field cron string; defaults to '0 0 * * *' on failure."""
+    try:
+        result = _ai_text_call(
+            system="You are a cron expression generator. Convert natural language scheduling descriptions to standard 5-field cron expressions.",
+            user=(
+                f"Convert this tracking frequency to a 5-field cron expression: {frequency_text!r}\n\n"
+                "Return ONLY the cron expression, nothing else. Examples:\n"
+                "Daily → 0 0 * * *\n"
+                "Every workday → 0 0 * * 1-5\n"
+                "Weekly on Monday → 0 0 * * 1\n"
+                "Every other Tuesday → 0 0 * * 2/2\n"
+                "Monthly on the 1st → 0 0 1 * *"
+            ),
+            bucket="lite",
+            max_tokens=32,
+            user_id=user_id,
+            timeout=20,
+            func_key="tracker_frequency",
+        )
+        result = result.strip().strip("`").strip()
+        parts = result.split()
+        if len(parts) == 5:
+            return result
+    except Exception:
+        logger.exception("Failed to translate tracker frequency %r", frequency_text)
+    return "0 0 * * *"
 
 
-def _tracker_period_context(user_id: int, period_start: str, period_end: str) -> str:
-    entries = journal.search_entries(user_id, date_from=period_start, date_to=period_end, limit=50)
+def _tracker_interval_context(user_id: int, interval_start: str, interval_end: str) -> str:
+    """Fetch journal entries and completed tasks in the given interval."""
+    entries = journal.search_entries(user_id, date_from=interval_start, date_to=interval_end, limit=60)
     parts = []
     for entry in reversed(entries):
         body = journal.get_entry(user_id, entry["date"], entry["time"])
         if body:
             parts.append(f"Journal entry {entry['date']} {entry['time']}:\n{body}")
-    return "\n\n".join(parts)
+    completed = tasks_db.list_completed_in_range(user_id, interval_start, interval_end)
+    if completed:
+        task_lines = "\n".join(f"- {t['title']}" for t in completed)
+        parts.append(f"Tasks completed in this period:\n{task_lines}")
+    return "\n\n---\n\n".join(parts)
 
 
-def _tracker_context_hash(context: str) -> str:
-    return hashlib.sha256(context.encode("utf-8")).hexdigest()
+def _cron_previous_fire(cron_expression: str, before_date: str) -> str:
+    """Compute the most recent cron fire date before before_date.
+    Falls back to one day before if croniter is unavailable."""
+    from datetime import datetime, timedelta
+    ref = datetime.strptime(before_date, "%Y-%m-%d")
+    try:
+        from croniter import croniter  # type: ignore
+        it = croniter(cron_expression, ref)
+        prev = it.get_prev(datetime)
+        return prev.strftime("%Y-%m-%d")
+    except Exception:
+        return (ref - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-def _apply_linked_task_values(user_id: int, fields: list[dict], row: dict,
-                              period_start: str, period_end: str) -> list[str]:
-    updated = []
-    for field in fields:
-        task_id = field.get("linked_task_id")
-        if not task_id:
-            continue
-        count = tasks_db.count_recurring_completions(user_id, task_id, period_start, period_end)
-        raw_value = count > 0 if field["field_type"] == "boolean" else count
+def _dummy_field(user_id: int, fields: list[dict], row: dict,
+                 period_start: str, period_end: str) -> list[str]:
+    # Kept as a stub so import references don't break; not used in new flow.
+    return []
+def ai_capture_trackers(user_id: int, as_of_date: str) -> dict:
+    """AI capture: for each active tracker due on as_of_date, fetch interval context
+    and extract the tracker value in one call per tracker."""
+    from datetime import datetime, timedelta
+    trackers_due = trackers_db.list_trackers_due(user_id, as_of_date)
+    results = []
+    for tracker in trackers_due:
         try:
-            value = trackers_db.coerce_value_for_field(field, raw_value)
-            trackers_db.set_value(
-                user_id,
-                row["id"],
-                field["id"],
-                json.dumps(value),
-                source="system",
-                confidence="user_confirmed",
-                source_session_id=f"task:{task_id}",
+            cron = tracker.get("cron_expression") or "0 0 * * *"
+            prev_date = _cron_previous_fire(cron, as_of_date)
+            context = _tracker_interval_context(user_id, prev_date, as_of_date)
+            tracker_type = tracker.get("type", "yes_no")
+            instructions = tracker.get("capture_instructions") or ""
+            if tracker_type == "yes_no":
+                value_desc = 'true or false'
+            elif tracker_type == "number":
+                value_desc = 'a numeric value (integer or float)'
+            else:
+                value_desc = 'a short text string'
+            user_msg = (
+                f"Tracker: {tracker['name']}\n"
+                f"Type: {tracker_type} — value must be {value_desc}\n"
+                f"Period: {prev_date} through {as_of_date}\n"
+                + (f"Capture instructions: {instructions}\n" if instructions else "")
+                + f"\nContext from this period:\n{context[:7000]}\n\n"
+                "Based on the above context, extract the tracker value for this period. "
+                "Return JSON only (no markdown):\n"
+                '{"value": <extracted value or null if cannot determine>, '
+                '"confidence": "low|medium|high", '
+                '"reason": "one sentence explanation"}'
             )
-            updated.append(field["field_key"])
-        except (trackers_db.TrackerValidationError, ValueError, TypeError):
-            logger.exception("Failed to apply linked task value for tracker field %s", field["id"])
-    return updated
-
-
-def populate_tracker_period(user_id: int, tracker_id: str, period_start: str,
-                            period_end: str) -> dict:
-    """Populate one tracker row from recurring task completions and period context."""
-    tracker = trackers_db.get_tracker(user_id, tracker_id)
-    if not tracker:
-        return {"error": "tracker not found"}
-    fields = trackers_db.list_fields(tracker_id)
-    row = trackers_db.get_or_create_row(user_id, tracker_id, period_start, period_end)
-    updated_fields = _apply_linked_task_values(user_id, fields, row, period_start, period_end)
-
-    context = _tracker_period_context(user_id, period_start, period_end)
-    context_hash = _tracker_context_hash(context)
-    inferable_policies = {"infer_when_explicit", "infer_when_likely", "ask_if_missing"}
-    inferable = [
-        f for f in fields
-        if f["inference_policy"] in inferable_policies and not f.get("linked_task_id")
-    ]
-    if not context.strip() or not inferable:
-        trackers_db.mark_row_processed(
-            user_id, row["id"], source="system", source_session_id="tracker-cron",
-            source_context_hash=context_hash,
-        )
-        return {"ok": True, "row_id": row["id"], "updated_fields": updated_fields, "used_ai": False}
-
-    field_specs = []
-    for f in inferable:
-        spec = {
-            "id": f["id"],
-            "name": f["name"],
-            "field_key": f["field_key"],
-            "field_type": f["field_type"],
-            "description": f.get("description"),
-            "ai_explanation": f.get("ai_explanation"),
-            "inference_policy": f["inference_policy"],
-            "required": bool(f["required"]),
-        }
-        if f.get("unit"):
-            spec["unit"] = f["unit"]
-        if f.get("options_json"):
+            result_text = _ai_text_call(
+                system=(
+                    "You are a personal tracker assistant. Extract structured values from "
+                    "journal entries and task completion data. Never guess — return null if unsure."
+                ),
+                user=user_msg,
+                bucket="regular",
+                max_tokens=256,
+                user_id=user_id,
+                timeout=60,
+                func_key="tracker_capture",
+            )
+            if result_text.startswith("```"):
+                result_text = result_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(result_text)
+            value = parsed.get("value")
+            if value is None:
+                # Create a pending entry (null value) for manual fill
+                trackers_db.upsert_entry(user_id, tracker["id"], as_of_date, None,
+                                         source="ai_captured")
+                results.append({"tracker_id": tracker["id"], "captured": False})
+            else:
+                value_json = json.dumps(value)
+                trackers_db.upsert_entry(user_id, tracker["id"], as_of_date, value_json,
+                                         source="ai_captured")
+                results.append({"tracker_id": tracker["id"], "captured": True, "value": value})
+        except Exception:
+            logger.exception("Tracker capture failed for tracker %s", tracker["id"])
             try:
-                spec["options"] = json.loads(f["options_json"])
+                trackers_db.upsert_entry(user_id, tracker["id"], as_of_date, None,
+                                         source="ai_captured")
             except Exception:
                 pass
-        if f.get("min_value") is not None:
-            spec["min_value"] = f["min_value"]
-        if f.get("max_value") is not None:
-            spec["max_value"] = f["max_value"]
-        field_specs.append(spec)
-
-    user_msg = (
-        f"Tracker: {tracker['name']} ({tracker['cadence']})\n"
-        f"Period: {period_start} through {period_end}\n"
-        f"Tracker instructions: {tracker.get('prompt_instructions') or '(none)'}\n\n"
-        f"Fields:\n{json.dumps(field_specs, indent=2)}\n\n"
-        f"Period context:\n{context[:6000]}\n\n"
-        "Populate fields only when the period context supports the value. "
-        "Use each field's ai_explanation as the primary guidance for when to infer "
-        "and when to ask for confirmation.\n"
-        "Return JSON only: "
-        '{"inferred":[{"field_id":"id","value":true,"confidence":"low|medium|high","reason":"short"}],'
-        '"questions":[{"field_id":"id","question":"question","reason":"why"}]}'
-    )
-    result_text = _ai_text_call(
-        system=(
-            "You are a tracker period population agent. Fill tracker rows from journal "
-            "context without guessing, and ask concise follow-up questions when required data is missing."
-        ),
-        user=user_msg,
-        bucket="lite",
-        max_tokens=2000,
-        user_id=user_id,
-        timeout=60,
-        func_key="tracker_period_population",
-    )
-    if result_text.startswith("```"):
-        result_text = result_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    result = json.loads(result_text)
-    fields_by_id = {f["id"]: f for f in fields}
-    for item in result.get("inferred", []):
-        field = fields_by_id.get(item.get("field_id"))
-        if not field or item.get("value") is None:
-            continue
-        try:
-            coerced = trackers_db.coerce_value_for_field(field, item.get("value"))
-            trackers_db.set_value(
-                user_id, row["id"], field["id"], json.dumps(coerced),
-                source="agent", confidence=item.get("confidence", "medium"),
-                source_session_id="tracker-cron",
-            )
-            updated_fields.append(field["field_key"])
-        except (trackers_db.TrackerValidationError, ValueError, TypeError, json.JSONDecodeError):
-            continue
-    for q in result.get("questions", []):
-        field = fields_by_id.get(q.get("field_id"))
-        if not field:
-            continue
-        trackers_db.create_question(
-            user_id, tracker_id, q.get("question") or "Can you confirm this tracker field?",
-            row_id=row["id"], field_id=field["id"], reason=q.get("reason") or None,
-        )
-    trackers_db.mark_row_processed(
-        user_id, row["id"], source="agent", source_session_id="tracker-cron",
-        source_context_hash=context_hash,
-    )
-    return {"ok": True, "row_id": row["id"], "updated_fields": updated_fields, "used_ai": True}
-
-
-def run_tracker_cron(user_id: int, as_of_date: str) -> dict:
-    results = []
-    for tracker, period_start, period_end in trackers_db.list_due_periods(user_id, as_of_date):
-        results.append({
-            "tracker_id": tracker["id"],
-            "period_start": period_start,
-            "period_end": period_end,
-            **populate_tracker_period(user_id, tracker["id"], period_start, period_end),
-        })
+            results.append({"tracker_id": tracker["id"], "captured": False, "error": True})
     return {"processed": len(results), "results": results}
 
 
-def infer_tracker_values(user_id: int, entry_id: str, date_str: str,
-                          content: str) -> None:
-    """Infer tracker field values from a journal entry.
-    Creates inferred tracker_values and tracker_questions for missing required fields.
-    Called from _run_entry_extraction as a background side-effect (no return value)."""
-    try:
-        active_trackers = trackers_db.list_trackers(user_id, include_archived=False)
-        if not active_trackers:
-            return
-
-        # Filter to trackers that have at least one inferable field
-        inferable_policies = {"infer_when_explicit", "infer_when_likely", "ask_if_missing"}
-        candidate_trackers = []
-        for tracker in active_trackers:
-            fields = trackers_db.list_fields(tracker["id"])
-            inferable = [f for f in fields if f["inference_policy"] in inferable_policies]
-            if inferable:
-                candidate_trackers.append((tracker, fields, inferable))
-
-        if not candidate_trackers:
-            return
-
-        # Build tracker context for LLM
-        tracker_specs = []
-        for tracker, fields, inferable in candidate_trackers:
-            field_specs = []
-            for f in fields:
-                spec = {
-                    "id": f["id"],
-                    "name": f["name"],
-                    "field_key": f["field_key"],
-                    "field_type": f["field_type"],
-                    "inference_policy": f["inference_policy"],
-                    "required": bool(f["required"]),
-                }
-                if f.get("ai_explanation"):
-                    spec["ai_explanation"] = f["ai_explanation"]
-                if f.get("unit"):
-                    spec["unit"] = f["unit"]
-                if f.get("options_json"):
-                    try:
-                        spec["options"] = json.loads(f["options_json"])
-                    except Exception:
-                        pass
-                if f.get("min_value") is not None:
-                    spec["min_value"] = f["min_value"]
-                if f.get("max_value") is not None:
-                    spec["max_value"] = f["max_value"]
-                field_specs.append(spec)
-            tracker_specs.append({
-                "id": tracker["id"],
-                "name": tracker["name"],
-                "cadence": tracker["cadence"],
-                "fields": field_specs,
-            })
-
-        user_msg = (
-            f"Journal entry for {date_str}:\n\n{content[:3000]}\n\n"
-            f"Trackers to evaluate:\n{json.dumps(tracker_specs, indent=2)}\n\n"
-            "For each tracker field, decide whether a value can be inferred from the journal entry.\n"
-            "Return JSON only (no markdown wrapper):\n"
-            '{"inferred": [{'
-            '"tracker_id": "8-char hex id", '
-            '"field_id": "8-char hex id", '
-            '"value": <the inferred value, type matching the field_type>, '
-            '"confidence": "low or medium or high", '
-            '"reason": "short explanation"'
-            "}], "
-            '"questions": [{'
-            '"tracker_id": "8-char hex id", '
-            '"field_id": "8-char hex id or null", '
-            '"question": "natural question to ask the user", '
-            '"reason": "why we are asking"'
-            "}]}\n\n"
-            "Rules:\n"
-            "- Only infer a value when the entry provides clear evidence. Prefer unknown over guessing.\n"
-            "- Do NOT infer absence of a behavior (e.g. 'did not drink') unless the entry explicitly says so.\n"
-            "- For fields with inference_policy='manual_only', skip entirely.\n"
-            "- For fields with inference_policy='ask_if_missing': if no value can be inferred AND "
-            "the field is required, add a question.\n"
-            "- For boolean fields: value must be true or false.\n"
-            "- For number/scale/duration fields: value must be a number.\n"
-            "- For text fields: value is a short string.\n"
-            "- For select/multi_select: value must be one of the listed options (or an array for multi).\n"
-            "- Questions should be conversational, first-person friendly.\n"
-            "- Return empty lists if nothing applies."
-        )
-
-        result_text = _ai_text_call(
-            system=(
-                "You are a personal tracker assistant. "
-                "Extract structured data from journal entries to fill in tracker fields."
-            ),
-            user=user_msg,
-            bucket="lite",
-            max_tokens=2000,
-            user_id=user_id,
-            timeout=60,
-            func_key="tracker_inference",
-        )
-        if result_text.startswith("```"):
-            result_text = result_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        result = json.loads(result_text)
-
-        # Store inferred values
-        tracker_by_id = {t["id"]: t for t, _, _ in candidate_trackers}
-        fields_by_tracker = {
-            t["id"]: {f["id"]: f for f in fields}
-            for t, fields, _ in candidate_trackers
-        }
-        for item in result.get("inferred", []):
-            tracker_id = item.get("tracker_id")
-            field_id = item.get("field_id")
-            value = item.get("value")
-            confidence = item.get("confidence", "medium")
-            if not tracker_id or not field_id or value is None:
-                continue
-            tracker = tracker_by_id.get(tracker_id)
-            field = fields_by_tracker.get(tracker_id, {}).get(field_id)
-            if not tracker or not field:
-                continue
-            period_start, period_end = trackers_db.derive_period_bounds(date_str, tracker["cadence"])
+def ai_tracker_commentary(user_id: int, tracker_id: str) -> str | None:
+    """Generate AI commentary for a tracker. Returns None if no instructions configured."""
+    tracker = trackers_db.get_tracker(user_id, tracker_id)
+    if not tracker or not tracker.get("ai_commentary_instructions"):
+        return None
+    entries = trackers_db.list_entries(user_id, tracker_id, limit=30)
+    if not entries:
+        return None
+    lines = []
+    for e in reversed(entries):
+        val = e.get("value_json")
+        if val is not None:
             try:
-                coerced = trackers_db.coerce_value_for_field(field, value)
-                row = trackers_db.get_or_create_row(user_id, tracker_id, period_start, period_end)
-                trackers_db.set_value(
-                    user_id, row["id"], field_id,
-                    json.dumps(coerced),
-                    source="inferred",
-                    confidence=confidence,
-                    source_session_id=entry_id,
-                )
-            except (trackers_db.TrackerValidationError, ValueError, json.JSONDecodeError):
-                continue
+                val = json.loads(val)
+            except Exception:
+                pass
+        lines.append(f"{e['entry_date']}: {val if val is not None else '(missing)'}")
+    data_text = "\n".join(lines)
+    latest_date = entries[0]["entry_date"] if entries else ""
+    instructions = tracker["ai_commentary_instructions"]
+    result = _ai_text_call(
+        system="You are a personal analytics assistant writing brief, insightful commentary on habit tracker data.",
+        user=(
+            f"Tracker: {tracker['name']} ({tracker['type']})\n"
+            f"Instructions: {instructions}\n\n"
+            f"Data (oldest first):\n{data_text}\n\n"
+            "Write 1–2 sentences of commentary. Be specific, personal, and grounded in the data."
+        ),
+        bucket="regular",
+        max_tokens=256,
+        user_id=user_id,
+        timeout=45,
+        func_key="tracker_commentary",
+    )
+    trackers_db.upsert_commentary(user_id, tracker_id, result.strip(), latest_date)
+    return result.strip()
 
-        # Store questions
-        for q in result.get("questions", []):
-            tracker_id = q.get("tracker_id")
-            if not tracker_id:
-                continue
-            tracker = tracker_by_id.get(tracker_id)
-            field_id = q.get("field_id") or None
-            field = fields_by_tracker.get(tracker_id, {}).get(field_id) if field_id else None
-            if not tracker or tracker["cadence"] == "ad_hoc":
-                continue
-            if field_id and not field:
-                continue
-            try:
-                period_start, period_end = trackers_db.derive_period_bounds(date_str, tracker["cadence"])
-                row = trackers_db.get_or_create_row(user_id, tracker_id, period_start, period_end)
-                trackers_db.create_question(
-                    user_id,
-                    tracker_id=tracker_id,
-                    question=q.get("question", ""),
-                    row_id=row["id"] if field_id else None,
-                    field_id=field_id,
-                    reason=q.get("reason") or None,
-                )
-            except trackers_db.TrackerValidationError:
-                continue
 
-    except Exception:
-        logger.exception("Tracker inference failed for entry %s user_id=%s", entry_id, user_id)
+def run_tracker_cron(user_id: int, as_of_date: str) -> dict:
+    """Cron entry point: AI-capture all due trackers for a user."""
+    return ai_capture_trackers(user_id, as_of_date)

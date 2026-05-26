@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Pending snapshots — Leaf by Leaf{% endblock %}
+
+{% block content %}
+<div class="ts-page">
+  <div class="ts-header">
+    <a href="{{ url_for('trackers_list') }}" class="ts-back">← Trackers</a>
+    <h1 class="ts-title">Pending snapshots</h1>
+  </div>
+
+  {% if not grouped %}
+  <div class="ts-empty">
+    <p>All caught up — no missing tracker entries.</p>
+  </div>
+  {% else %}
+  <div class="ts-groups" id="snapshotGroups">
+    {% for group in grouped %}
+    <div class="ts-group" data-date="{{ group.date }}">
+      <h2 class="ts-date">
+        <span class="ts-date-display" data-date="{{ group.date }}">{{ group.date }}</span>
+      </h2>
+      {% for entry in group.entries %}
+      <div class="ts-row" id="row-{{ entry.id }}" data-entry-id="{{ entry.id }}" data-tracker-id="{{ entry.tracker_id }}" data-type="{{ entry.tracker_type }}">
+        <span class="ts-tracker-name">{{ entry.tracker_name }}</span>
+        <div class="ts-input-wrap">
+          {% if entry.tracker_type == 'yes_no' %}
+          <label class="ts-checkbox-label">
+            <input type="checkbox" class="ts-checkbox" onchange="Snapshots.save('{{ entry.id }}', '{{ entry.tracker_id }}', this.checked)">
+          </label>
+          {% elif entry.tracker_type == 'number' %}
+          <input type="number" class="ts-number-input" placeholder="—"
+                 onchange="Snapshots.save('{{ entry.id }}', '{{ entry.tracker_id }}', parseFloat(this.value))">
+          {% else %}
+          <input type="text" class="ts-text-input" placeholder="Enter note…"
+                 onchange="Snapshots.save('{{ entry.id }}', '{{ entry.tracker_id }}', this.value)">
+          {% endif %}
+        </div>
+        <button class="btn-secondary ts-skip-btn" onclick="Snapshots.skip('{{ entry.id }}', '{{ entry.tracker_id }}')">Skip</button>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Humanize date labels
+document.addEventListener('DOMContentLoaded', () => {
+  const today = new Date(); today.setHours(0,0,0,0);
+  document.querySelectorAll('.ts-date-display').forEach(el => {
+    const d = new Date(el.dataset.date + 'T00:00:00');
+    const diff = Math.round((today - d) / 86400000);
+    if (diff === 0) el.textContent = 'Today';
+    else if (diff === 1) el.textContent = 'Yesterday';
+    else el.textContent = el.dataset.date;
+  });
+});
+
+const Snapshots = {
+  removeRow(entryId) {
+    const row = document.getElementById('row-' + entryId);
+    if (!row) return;
+    row.style.opacity = '0';
+    row.style.transition = 'opacity 220ms';
+    setTimeout(() => {
+      const group = row.closest('.ts-group');
+      row.remove();
+      if (group && !group.querySelector('.ts-row')) group.remove();
+      if (!document.querySelector('.ts-row')) {
+        document.getElementById('snapshotGroups').innerHTML =
+          '<p class="ts-empty-inline">All caught up.</p>';
+      }
+    }, 240);
+  },
+
+  save(entryId, trackerId, value) {
+    fetch(`/api/trackers/${trackerId}/entries/${entryId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    }).then(r => r.json()).then(d => {
+      if (d.ok) this.removeRow(entryId);
+    });
+  },
+
+  skip(entryId, trackerId) {
+    fetch(`/api/trackers/${trackerId}/entries/${entryId}/skip`, { method: 'POST' })
+      .then(r => r.json()).then(d => {
+        if (d.ok) this.removeRow(entryId);
+      });
+  },
+};
+</script>
+{% endblock %}
