@@ -27,16 +27,18 @@ class ModelPreset:
 REGULAR_PRESETS = [
     ModelPreset("anthropic_sonnet_46", "Anthropic Claude Sonnet 4.6", "anthropic", "claude-sonnet-4-6", "messages"),
     ModelPreset("openai_gpt_54_mini", "OpenAI GPT-5.4 mini", "openai", "gpt-5.4-mini", "chat_completions"),
+    ModelPreset("gemini_35_flash", "Gemini 3.5 Flash", "gemini", "gemini-3.5-flash", "generate_content"),
     ModelPreset("gemini_3_flash", "Gemini 3 Flash", "gemini", "gemini-3-flash-preview", "generate_content"),
-    ModelPreset("gemini_3_pro", "Gemini 3 Pro", "gemini", "gemini-3-pro-preview", "generate_content"),
+    ModelPreset("gemini_3_pro", "Gemini 3.1 Pro", "gemini", "gemini-3.1-pro-preview", "generate_content"),
 ]
 
 LITE_PRESETS = [
     ModelPreset("anthropic_haiku_45", "Anthropic Claude Haiku 4.5", "anthropic", "claude-haiku-4-5-20251001", "messages"),
     ModelPreset("openai_gpt_54_mini", "OpenAI GPT-5.4 mini", "openai", "gpt-5.4-mini", "chat_completions"),
     ModelPreset("openai_gpt_54_nano", "OpenAI GPT-5.4 nano", "openai", "gpt-5.4-nano", "chat_completions"),
-    ModelPreset("gemini_31_flash_lite", "Gemini 3.1 Flash-Lite", "gemini", "gemini-3.1-flash-lite-preview", "generate_content"),
+    ModelPreset("gemini_31_flash_lite", "Gemini 3.1 Flash-Lite", "gemini", "gemini-3.1-flash-lite", "generate_content"),
     ModelPreset("gemini_3_flash", "Gemini 3 Flash", "gemini", "gemini-3-flash-preview", "generate_content"),
+    ModelPreset("gemini_35_flash", "Gemini 3.5 Flash", "gemini", "gemini-3.5-flash", "generate_content"),
 ]
 
 PRESETS_BY_BUCKET = {
