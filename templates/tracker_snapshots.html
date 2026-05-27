@@ -1,16 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Pending snapshots — Leaf by Leaf{% endblock %}
+{% block title %}Upcoming snapshots — Leaf by Leaf{% endblock %}
 
 {% block content %}
 <div class="ts-page">
   <div class="ts-header">
     <a href="{{ url_for('trackers_list') }}" class="ts-back">← Trackers</a>
-    <h1 class="ts-title">Pending snapshots</h1>
+    <h1 class="ts-title">Upcoming snapshots</h1>
   </div>
 
   {% if not grouped %}
   <div class="ts-empty">
-    <p>All caught up — no missing tracker entries.</p>
+    <p>No upcoming tracker entries in the next 14 days.</p>
   </div>
   {% else %}
   <div class="ts-groups" id="snapshotGroups">
@@ -20,22 +20,31 @@
         <span class="ts-date-display" data-date="{{ group.date }}">{{ group.date }}</span>
       </h2>
       {% for entry in group.entries %}
-      <div class="ts-row" id="row-{{ entry.id }}" data-entry-id="{{ entry.id }}" data-tracker-id="{{ entry.tracker_id }}" data-type="{{ entry.tracker_type }}">
+      <div class="ts-row" id="row-{{ entry.tracker_id }}-{{ entry.entry_date }}"
+           data-tracker-id="{{ entry.tracker_id }}"
+           data-date="{{ entry.entry_date }}"
+           data-type="{{ entry.tracker_type }}">
         <span class="ts-tracker-name">{{ entry.tracker_name }}</span>
         <div class="ts-input-wrap">
           {% if entry.tracker_type == 'yes_no' %}
           <label class="ts-checkbox-label">
-            <input type="checkbox" class="ts-checkbox" onchange="Snapshots.save('{{ entry.id }}', '{{ entry.tracker_id }}', this.checked)">
+            <input type="checkbox" class="ts-checkbox"
+                   onchange="Snapshots.save('{{ entry.tracker_id }}', '{{ entry.entry_date }}', this.checked)">
           </label>
           {% elif entry.tracker_type == 'number' %}
-          <input type="number" class="ts-number-input" placeholder="—"
-                 onchange="Snapshots.save('{{ entry.id }}', '{{ entry.tracker_id }}', parseFloat(this.value))">
+          <input type="number" class="ts-number-input"
+                 step="any"
+                 {% if entry.tracker_number_min is not none %}min="{{ entry.tracker_number_min }}"{% endif %}
+                 {% if entry.tracker_number_max is not none %}max="{{ entry.tracker_number_max }}"{% endif %}
+                 placeholder="—"
+                 onchange="Snapshots.save('{{ entry.tracker_id }}', '{{ entry.entry_date }}', parseFloat(this.value))">
           {% else %}
           <input type="text" class="ts-text-input" placeholder="Enter note…"
-                 onchange="Snapshots.save('{{ entry.id }}', '{{ entry.tracker_id }}', this.value)">
+                 onchange="Snapshots.save('{{ entry.tracker_id }}', '{{ entry.entry_date }}', this.value)">
           {% endif %}
         </div>
-        <button class="btn-secondary ts-skip-btn" onclick="Snapshots.skip('{{ entry.id }}', '{{ entry.tracker_id }}')">Skip</button>
+        <button class="btn-secondary ts-skip-btn"
+                onclick="Snapshots.skip('{{ entry.tracker_id }}', '{{ entry.entry_date }}')">Skip</button>
       </div>
       {% endfor %}
     </div>
@@ -47,21 +56,20 @@
 
 {% block scripts %}
 <script>
-// Humanize date labels
 document.addEventListener('DOMContentLoaded', () => {
   const today = new Date(); today.setHours(0,0,0,0);
   document.querySelectorAll('.ts-date-display').forEach(el => {
     const d = new Date(el.dataset.date + 'T00:00:00');
-    const diff = Math.round((today - d) / 86400000);
+    const diff = Math.round((d - today) / 86400000);
     if (diff === 0) el.textContent = 'Today';
-    else if (diff === 1) el.textContent = 'Yesterday';
+    else if (diff === 1) el.textContent = 'Tomorrow';
     else el.textContent = el.dataset.date;
   });
 });
 
 const Snapshots = {
-  removeRow(entryId) {
-    const row = document.getElementById('row-' + entryId);
+  removeRow(trackerId, date) {
+    const row = document.getElementById(`row-${trackerId}-${date}`);
     if (!row) return;
     row.style.opacity = '0';
     row.style.transition = 'opacity 220ms';
@@ -76,21 +84,24 @@ const Snapshots = {
     }, 240);
   },
 
-  save(entryId, trackerId, value) {
-    fetch(`/api/trackers/${trackerId}/entries/${entryId}`, {
-      method: 'PATCH',
+  save(trackerId, date, value) {
+    fetch(`/api/trackers/${trackerId}/upcoming`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value }),
+      body: JSON.stringify({ entry_date: date, value }),
     }).then(r => r.json()).then(d => {
-      if (d.ok) this.removeRow(entryId);
+      if (d.id) this.removeRow(trackerId, date);
     });
   },
 
-  skip(entryId, trackerId) {
-    fetch(`/api/trackers/${trackerId}/entries/${entryId}/skip`, { method: 'POST' })
-      .then(r => r.json()).then(d => {
-        if (d.ok) this.removeRow(entryId);
-      });
+  skip(trackerId, date) {
+    fetch(`/api/trackers/${trackerId}/upcoming`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entry_date: date, skipped: true }),
+    }).then(r => r.json()).then(d => {
+      if (d.id) this.removeRow(trackerId, date);
+    });
   },
 };
 </script>

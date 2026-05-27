@@ -270,7 +270,7 @@ def skip_entry(user_id: int, entry_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Snapshots (pending entries)
+# Snapshots
 # ---------------------------------------------------------------------------
 
 def list_pending_snapshots(user_id: int, today: str) -> list[dict]:
@@ -289,6 +289,75 @@ def list_pending_snapshots(user_id: int, today: str) -> list[dict]:
             (user_id, today),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_upcoming_snapshots(user_id: int, today: str, days_ahead: int = 14) -> list[dict]:
+    """Return upcoming scheduled tracker dates (after today) that don't have an entry yet.
+
+    Returns a list of dicts with tracker info and the scheduled entry_date.
+    Existing skipped or filled entries for a date are excluded.
+    Sorted by entry_date ASC, then tracker sort_order ASC.
+    """
+    from datetime import datetime, timedelta
+    try:
+        from croniter import croniter
+        has_croniter = True
+    except ImportError:
+        has_croniter = False
+
+    trackers = list_trackers(user_id)
+    cutoff = (datetime.strptime(today, "%Y-%m-%d") + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+    # Fetch existing entries in the upcoming window to exclude them
+    with db.get_db() as conn:
+        existing_rows = conn.execute(
+            """SELECT tracker_id, entry_date FROM tracker_entries
+               WHERE user_id=? AND entry_date > ? AND entry_date <= ?""",
+            (user_id, today, cutoff),
+        ).fetchall()
+    existing = {(r["tracker_id"], r["entry_date"]) for r in existing_rows}
+
+    results = []
+    ref_dt = datetime.strptime(today, "%Y-%m-%d")
+
+    for t in trackers:
+        cron_expr = t.get("cron_expression") or "0 0 * * *"
+        if not has_croniter:
+            # Fallback: just show tomorrow if no croniter
+            d = (ref_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+            if (t["id"], d) not in existing:
+                results.append({
+                    "entry_date": d,
+                    "tracker_id": t["id"],
+                    "tracker_name": t["name"],
+                    "tracker_type": t["type"],
+                    "tracker_number_min": t.get("number_min"),
+                    "tracker_number_max": t.get("number_max"),
+                    "entry_id": None,
+                })
+            continue
+        try:
+            it = croniter(cron_expr, ref_dt)
+            while True:
+                next_dt = it.get_next(datetime)
+                next_date = next_dt.strftime("%Y-%m-%d")
+                if next_date > cutoff:
+                    break
+                if (t["id"], next_date) not in existing:
+                    results.append({
+                        "entry_date": next_date,
+                        "tracker_id": t["id"],
+                        "tracker_name": t["name"],
+                        "tracker_type": t["type"],
+                        "tracker_number_min": t.get("number_min"),
+                        "tracker_number_max": t.get("number_max"),
+                        "entry_id": None,
+                    })
+        except Exception:
+            continue
+
+    results.sort(key=lambda r: (r["entry_date"], ))
+    return results
 
 
 # ---------------------------------------------------------------------------

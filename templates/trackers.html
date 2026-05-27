@@ -8,9 +8,7 @@
       <h1 class="tl-title">Trackers</h1>
     </div>
     <div class="tl-header-actions">
-      <a href="{{ url_for('tracker_snapshots_page') }}" class="btn-secondary{% if pending_count > 0 %} tl-pending-btn{% endif %}">
-        Pending{% if pending_count > 0 %} ({{ pending_count }}){% endif %}
-      </a>
+      <a href="{{ url_for('tracker_snapshots_page') }}" class="btn-secondary">Upcoming</a>
       <a href="{{ url_for('tracker_create_page') }}" class="btn-primary">New tracker</a>
     </div>
   </div>

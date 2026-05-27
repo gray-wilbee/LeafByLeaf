@@ -2121,12 +2121,10 @@ def trackers_list():
         ])
         commentary = trackers_db.get_commentary(uid(), t["id"])
         t["commentary"] = commentary["commentary"] if commentary else None
-    pending_count = len(trackers_db.list_pending_snapshots(uid(), today))
     return render_template(
         "trackers.html",
         trackers=all_trackers,
         today=today,
-        pending_count=pending_count,
     )
 
 
@@ -2143,8 +2141,7 @@ def tracker_snapshots_page():
         return redirect(url_for("login"))
     tz = user_tz()
     today = datetime.now(tz).strftime("%Y-%m-%d")
-    snapshots = trackers_db.list_pending_snapshots(uid(), today)
-    # Group by date
+    snapshots = trackers_db.list_upcoming_snapshots(uid(), today)
     from itertools import groupby
     grouped = []
     for date, group in groupby(snapshots, key=lambda s: s["entry_date"]):
@@ -2300,6 +2297,25 @@ def api_tracker_entry_skip(tracker_id, entry_id):
         return jsonify({"error": "not found"}), 404
     trackers_db.skip_entry(uid(), entry_id)
     return jsonify({"ok": True})
+
+
+@app.route("/api/trackers/<tracker_id>/upcoming", methods=["POST"])
+def api_tracker_upcoming_entry(tracker_id):
+    """Create a pre-filled or pre-skipped upcoming entry for a given date."""
+    if not logged_in():
+        return jsonify({"error": "unauthorized"}), 401
+    if not trackers_db.get_tracker(uid(), tracker_id):
+        return jsonify({"error": "not found"}), 404
+    data = request.get_json(silent=True) or {}
+    entry_date = (data.get("entry_date") or "").strip()
+    if not entry_date:
+        return jsonify({"error": "entry_date required"}), 400
+    skipped = bool(data.get("skipped"))
+    value = data.get("value")
+    value_json = json.dumps(value) if value is not None else None
+    eid = trackers_db.upsert_entry(uid(), tracker_id, entry_date, value_json,
+                                   source="manual", skipped=skipped)
+    return jsonify({"id": eid})
 
 
 @app.route("/api/trackers/snapshots", methods=["GET"])

@@ -1,5 +1,5 @@
 // Bump version string whenever CSS or JS changes to invalidate the cache
-const CACHE = 'journal-v41';
+const CACHE = 'journal-v42';
 
 const PRECACHE = [
   '/static/style.css',
