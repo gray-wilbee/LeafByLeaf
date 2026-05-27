@@ -80,7 +80,7 @@ class ChatGPTMCPConnectorTests(TempVoiceJournalDB):
                     "test-client",
                     user_id,
                     scope,
-                    "https://journal.wilbeevibes.com/mcp",
+                    "https://app.leafbyleaf.net/mcp",
                     "2026-05-15T00:00:00+00:00",
                     "2999-01-01T00:00:00+00:00",
                 ),
@@ -100,13 +100,13 @@ class ChatGPTMCPConnectorTests(TempVoiceJournalDB):
         auth_meta = client.get("/.well-known/oauth-authorization-server").get_json()
         resource_meta = client.get("/.well-known/oauth-protected-resource").get_json()
 
-        self.assertEqual(auth_meta["issuer"], "https://journal.wilbeevibes.com")
-        self.assertEqual(auth_meta["registration_endpoint"], "https://journal.wilbeevibes.com/oauth/register")
+        self.assertEqual(auth_meta["issuer"], "https://app.leafbyleaf.net")
+        self.assertEqual(auth_meta["registration_endpoint"], "https://app.leafbyleaf.net/oauth/register")
         self.assertIn("S256", auth_meta["code_challenge_methods_supported"])
         self.assertIn("journal.read", auth_meta["scopes_supported"])
         self.assertIn("settings.write", auth_meta["scopes_supported"])
-        self.assertEqual(resource_meta["resource"], "https://journal.wilbeevibes.com/mcp")
-        self.assertEqual(resource_meta["authorization_servers"], ["https://journal.wilbeevibes.com"])
+        self.assertEqual(resource_meta["resource"], "https://app.leafbyleaf.net/mcp")
+        self.assertEqual(resource_meta["authorization_servers"], ["https://app.leafbyleaf.net"])
         self.assertIn("tasks.write", resource_meta["scopes_supported"])
 
     def test_dynamic_registration_allows_chatgpt_and_localhost_redirects(self):

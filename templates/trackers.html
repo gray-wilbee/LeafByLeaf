@@ -6,16 +6,11 @@
   <div class="tl-header">
     <div class="tl-header-text">
       <h1 class="tl-title">Trackers</h1>
-      {% if pending_count > 0 %}
-      <a href="{{ url_for('tracker_snapshots_page') }}" class="tl-pending-badge">
-        {{ pending_count }} pending
-      </a>
-      {% endif %}
     </div>
     <div class="tl-header-actions">
-      {% if pending_count > 0 %}
-      <a href="{{ url_for('tracker_snapshots_page') }}" class="btn-secondary">Fill in missing</a>
-      {% endif %}
+      <a href="{{ url_for('tracker_snapshots_page') }}" class="btn-secondary{% if pending_count > 0 %} tl-pending-btn{% endif %}">
+        Pending{% if pending_count > 0 %} ({{ pending_count }}){% endif %}
+      </a>
       <a href="{{ url_for('tracker_create_page') }}" class="btn-primary">New tracker</a>
     </div>
   </div>

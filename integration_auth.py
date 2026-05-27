@@ -9,7 +9,7 @@ from typing import Any
 import db
 import users
 
-BASE_URL = "https://journal.wilbeevibes.com"
+BASE_URL = "https://app.leafbyleaf.net"
 MCP_RESOURCE = f"{BASE_URL}/mcp"
 GPT_ACTIONS_RESOURCE = f"{BASE_URL}/gpt-actions"
 SUPPORTED_RESOURCES = {MCP_RESOURCE, GPT_ACTIONS_RESOURCE}

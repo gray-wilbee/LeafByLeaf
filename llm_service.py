@@ -1438,7 +1438,14 @@ def ai_capture_trackers(user_id: int, as_of_date: str) -> dict:
             if tracker_type == "yes_no":
                 value_desc = 'true or false'
             elif tracker_type == "number":
-                value_desc = 'a numeric value (integer or float)'
+                num_hint = ""
+                if tracker.get("number_min") is not None and tracker.get("number_max") is not None:
+                    num_hint = f" (expected range: {tracker['number_min']}–{tracker['number_max']})"
+                elif tracker.get("number_min") is not None:
+                    num_hint = f" (minimum: {tracker['number_min']})"
+                elif tracker.get("number_max") is not None:
+                    num_hint = f" (maximum: {tracker['number_max']})"
+                value_desc = f'a numeric value (integer or float){num_hint}'
             else:
                 value_desc = 'a short text string'
             user_msg = (
@@ -1448,19 +1455,22 @@ def ai_capture_trackers(user_id: int, as_of_date: str) -> dict:
                 + (f"Capture instructions: {instructions}\n" if instructions else "")
                 + f"\nContext from this period:\n{context[:7000]}\n\n"
                 "Based on the above context, extract the tracker value for this period. "
+                "It is perfectly fine to return null if the context does not contain enough information to justify a value — do not guess. "
+                "When you do set a value, include 1–2 sentences explaining your reasoning, using direct quotes from the context to validate your choice. "
                 "Return JSON only (no markdown):\n"
-                '{"value": <extracted value or null if cannot determine>, '
+                '{"value": <extracted value or null if insufficient evidence>, '
                 '"confidence": "low|medium|high", '
-                '"reason": "one sentence explanation"}'
+                '"explanation": "1-2 sentence explanation with direct quotes, or null if value is null"}'
             )
             result_text = _ai_text_call(
                 system=(
                     "You are a personal tracker assistant. Extract structured values from "
-                    "journal entries and task completion data. Never guess — return null if unsure."
+                    "journal entries and task completion data. "
+                    "You MUST return null for value if there is not enough evidence in the context — passing is always the right choice over guessing."
                 ),
                 user=user_msg,
                 bucket="regular",
-                max_tokens=256,
+                max_tokens=300,
                 user_id=user_id,
                 timeout=60,
                 func_key="tracker_capture",
@@ -1469,6 +1479,7 @@ def ai_capture_trackers(user_id: int, as_of_date: str) -> dict:
                 result_text = result_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
             parsed = json.loads(result_text)
             value = parsed.get("value")
+            explanation = parsed.get("explanation") or None
             if value is None:
                 # Create a pending entry (null value) for manual fill
                 trackers_db.upsert_entry(user_id, tracker["id"], as_of_date, None,
@@ -1477,7 +1488,7 @@ def ai_capture_trackers(user_id: int, as_of_date: str) -> dict:
             else:
                 value_json = json.dumps(value)
                 trackers_db.upsert_entry(user_id, tracker["id"], as_of_date, value_json,
-                                         source="ai_captured")
+                                         source="ai_captured", ai_explanation=explanation)
                 results.append({"tracker_id": tracker["id"], "captured": True, "value": value})
         except Exception:
             logger.exception("Tracker capture failed for tracker %s", tracker["id"])

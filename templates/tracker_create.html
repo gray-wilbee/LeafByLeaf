@@ -26,6 +26,19 @@
       <input type="hidden" id="tc-type" name="type" value="yes_no">
     </div>
 
+    <div class="tc-field" id="field-number-range" hidden>
+      <div style="display:flex;gap:12px;">
+        <div style="flex:1;">
+          <label class="tc-label" for="tc-number-min">Min value <span class="tc-optional-note">(optional)</span></label>
+          <input class="tc-input" id="tc-number-min" name="number_min" type="number" step="any" placeholder="—">
+        </div>
+        <div style="flex:1;">
+          <label class="tc-label" for="tc-number-max">Max value <span class="tc-optional-note">(optional)</span></label>
+          <input class="tc-input" id="tc-number-max" name="number_max" type="number" step="any" placeholder="—">
+        </div>
+      </div>
+    </div>
+
     <div class="tc-field">
       <label class="tc-label" for="tc-frequency">Frequency</label>
       <input class="tc-input" id="tc-frequency" name="frequency" type="text"
@@ -73,7 +86,9 @@ const Create = {
   setType(btn) {
     document.querySelectorAll('.tc-type-btn').forEach(b => b.classList.remove('tc-type-btn--active'));
     btn.classList.add('tc-type-btn--active');
-    document.getElementById('tc-type').value = btn.dataset.value;
+    const val = btn.dataset.value;
+    document.getElementById('tc-type').value = val;
+    document.getElementById('field-number-range').hidden = (val !== 'number');
   },
 
   toggleOptional(key) {
@@ -92,12 +107,16 @@ const Create = {
     btn.textContent = 'Creating…';
     status.textContent = '';
 
+    const minVal = document.getElementById('tc-number-min').value;
+    const maxVal = document.getElementById('tc-number-max').value;
     const payload = {
       name: document.getElementById('tc-name').value.trim(),
       type: document.getElementById('tc-type').value,
       frequency: document.getElementById('tc-frequency').value.trim() || 'Daily',
       capture_instructions: document.getElementById('tc-capture').value.trim() || null,
       ai_commentary_instructions: document.getElementById('tc-commentary').value.trim() || null,
+      number_min: minVal !== '' ? parseFloat(minVal) : null,
+      number_max: maxVal !== '' ? parseFloat(maxVal) : null,
     };
 
     fetch('/api/trackers', {

@@ -2205,6 +2205,8 @@ def api_trackers():
         return jsonify({"error": "name required"}), 400
     try:
         cron_expression = llm_service.ai_translate_frequency(frequency, uid())
+        number_min = data.get("number_min")
+        number_max = data.get("number_max")
         tracker_id = trackers_db.create_tracker(
             uid(),
             name=name,
@@ -2213,6 +2215,8 @@ def api_trackers():
             cron_expression=cron_expression,
             capture_instructions=data.get("capture_instructions"),
             ai_commentary_instructions=data.get("ai_commentary_instructions"),
+            number_min=float(number_min) if number_min is not None else None,
+            number_max=float(number_max) if number_max is not None else None,
         )
     except trackers_db.TrackerError as e:
         return _json_validation_error(e)

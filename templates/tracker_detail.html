@@ -40,29 +40,15 @@
   {% endif %}
 
   <!-- AI Commentary -->
+  {% if tracker.ai_commentary_instructions %}
   <div class="td-commentary-block" id="commentaryBlock">
-    {% if not tracker.ai_commentary_instructions %}
-      <button class="btn-secondary td-commentary-add" onclick="Detail.openCommentaryInstructions()">
-        + Add AI commentary
-      </button>
+    {% if commentary %}
+    <p class="td-commentary-text" id="commentaryText">{{ commentary.commentary }}</p>
     {% else %}
-      {% if commentary %}
-      <p class="td-commentary-text" id="commentaryText">{{ commentary.commentary }}</p>
-      {% else %}
-      <p class="td-commentary-text td-commentary-text--empty" id="commentaryText">Generating commentary…</p>
-      {% endif %}
-      <button class="td-commentary-edit-btn" onclick="Detail.openCommentaryInstructions()">Edit instructions</button>
+    <p class="td-commentary-text td-commentary-text--empty" id="commentaryText">Generating commentary…</p>
     {% endif %}
-    <!-- Commentary instructions editor (hidden by default) -->
-    <div class="td-commentary-editor" id="commentaryEditor" hidden>
-      <label class="td-label">AI commentary instructions</label>
-      <textarea class="td-textarea" id="commentaryInstructions" rows="4">{{ tracker.ai_commentary_instructions or '' }}</textarea>
-      <div class="td-commentary-editor-actions">
-        <button class="btn-primary" onclick="Detail.saveCommentaryInstructions()">Save</button>
-        <button class="btn-secondary" onclick="Detail.closeCommentaryInstructions()">Cancel</button>
-      </div>
-    </div>
   </div>
+  {% endif %}
 
   <!-- Entry list -->
   <div class="td-entries">
@@ -95,6 +81,8 @@
         <input type="number" class="td-entry-number"
                value="{{ entry.value_json if entry.value_json is not none else '' }}"
                placeholder="—"
+               {% if tracker.number_min is not none %}min="{{ tracker.number_min }}"{% endif %}
+               {% if tracker.number_max is not none %}max="{{ tracker.number_max }}"{% endif %}
                onchange="Detail.saveEntry('{{ entry.id }}', parseFloat(this.value))">
 
         {% else %}
@@ -102,7 +90,16 @@
                   onchange="Detail.saveEntry('{{ entry.id }}', this.value)">{% if entry.value_json is not none %}{{ entry.value_json | trim('"') }}{% endif %}</textarea>
         {% endif %}
 
-        <span class="td-entry-source" title="{{ entry.source }}">{{ entry.source }}</span>
+        <div class="td-entry-meta">
+          {% if entry.ai_explanation %}
+          <button class="td-entry-source td-entry-source--expandable"
+                  onclick="Detail.toggleExplanation(this)"
+                  title="{{ entry.source }}">{{ entry.source }}</button>
+          <div class="td-entry-explanation" hidden>{{ entry.ai_explanation }}</div>
+          {% else %}
+          <span class="td-entry-source" title="{{ entry.source }}">{{ entry.source }}</span>
+          {% endif %}
+        </div>
       </div>
       {% endfor %}
       {% endif %}
@@ -122,9 +119,25 @@
       <label class="td-label">Frequency</label>
       <input class="td-input" id="edit-frequency" type="text" value="{{ tracker.frequency }}">
     </div>
+    {% if tracker.type == 'number' %}
     <div class="modal-field">
-      <label class="td-label">Capture instructions</label>
+      <label class="td-label">Min value <span class="td-label-optional">(optional)</span></label>
+      <input class="td-input" id="edit-number-min" type="number" step="any"
+             value="{{ tracker.number_min if tracker.number_min is not none else '' }}" placeholder="—">
+    </div>
+    <div class="modal-field">
+      <label class="td-label">Max value <span class="td-label-optional">(optional)</span></label>
+      <input class="td-input" id="edit-number-max" type="number" step="any"
+             value="{{ tracker.number_max if tracker.number_max is not none else '' }}" placeholder="—">
+    </div>
+    {% endif %}
+    <div class="modal-field">
+      <label class="td-label">Capture instructions <span class="td-label-optional">(optional)</span></label>
       <textarea class="td-textarea" id="edit-capture" rows="3">{{ tracker.capture_instructions or '' }}</textarea>
+    </div>
+    <div class="modal-field">
+      <label class="td-label">AI commentary instructions <span class="td-label-optional">(optional)</span></label>
+      <textarea class="td-textarea" id="edit-commentary" rows="3">{{ tracker.ai_commentary_instructions or '' }}</textarea>
     </div>
     <div class="modal-actions">
       <button class="btn-primary" onclick="Detail.saveEdit()">Save</button>
@@ -148,7 +161,10 @@
         <input type="checkbox" id="addrow-value-yn"> Yes
       </label>
       {% elif tracker.type == 'number' %}
-      <input class="td-input" id="addrow-value-num" type="number" placeholder="0">
+      <input class="td-input" id="addrow-value-num" type="number" step="any"
+             placeholder="0"
+             {% if tracker.number_min is not none %}min="{{ tracker.number_min }}"{% endif %}
+             {% if tracker.number_max is not none %}max="{{ tracker.number_max }}"{% endif %}>
       {% else %}
       <textarea class="td-textarea" id="addrow-value-text" rows="3" placeholder="Enter note…"></textarea>
       {% endif %}
@@ -247,6 +263,14 @@ const Detail = (() => {
     }, 600);
   }
 
+  function toggleExplanation(btn) {
+    const explanation = btn.nextElementSibling;
+    if (!explanation) return;
+    const isHidden = explanation.hidden;
+    explanation.hidden = !isHidden;
+    btn.classList.toggle('td-entry-source--open', isHidden);
+  }
+
   // ── Edit tracker modal ────────────────────────────────────────────────────
   function openEdit() {
     document.getElementById('editModal').hidden = false;
@@ -259,7 +283,12 @@ const Detail = (() => {
       name: document.getElementById('edit-name').value.trim(),
       frequency: document.getElementById('edit-frequency').value.trim(),
       capture_instructions: document.getElementById('edit-capture').value.trim() || null,
+      ai_commentary_instructions: document.getElementById('edit-commentary').value.trim() || null,
     };
+    const minEl = document.getElementById('edit-number-min');
+    const maxEl = document.getElementById('edit-number-max');
+    if (minEl) payload.number_min = minEl.value !== '' ? parseFloat(minEl.value) : null;
+    if (maxEl) payload.number_max = maxEl.value !== '' ? parseFloat(maxEl.value) : null;
     fetch(`/api/trackers/${_TRACKER_ID}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -273,35 +302,6 @@ const Detail = (() => {
     fetch(`/api/trackers/${_TRACKER_ID}`, { method: 'DELETE' })
       .then(r => r.json()).then(d => {
         if (d.ok) window.location.href = '/trackers';
-      });
-  }
-
-  // ── AI Commentary ─────────────────────────────────────────────────────────
-  function openCommentaryInstructions() {
-    document.getElementById('commentaryEditor').hidden = false;
-  }
-  function closeCommentaryInstructions() {
-    document.getElementById('commentaryEditor').hidden = true;
-  }
-  function saveCommentaryInstructions() {
-    const instructions = document.getElementById('commentaryInstructions').value.trim();
-    fetch(`/api/trackers/${_TRACKER_ID}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ai_commentary_instructions: instructions || null }),
-    }).then(r => r.json()).then(d => {
-      if (d.ok) {
-        closeCommentaryInstructions();
-        if (instructions) refreshCommentary();
-      }
-    });
-  }
-  function refreshCommentary() {
-    const textEl = document.getElementById('commentaryText');
-    if (textEl) textEl.textContent = 'Generating…';
-    fetch(`/api/trackers/${_TRACKER_ID}/commentary?refresh=1`)
-      .then(r => r.json()).then(d => {
-        if (d.commentary && textEl) textEl.textContent = d.commentary.commentary || '';
       });
   }
 
@@ -339,10 +339,8 @@ const Detail = (() => {
   document.addEventListener('DOMContentLoaded', renderViz);
 
   return {
-    renderViz, saveEntry,
+    renderViz, saveEntry, toggleExplanation,
     openEdit, closeEdit, saveEdit, confirmArchive,
-    openCommentaryInstructions, closeCommentaryInstructions,
-    saveCommentaryInstructions,
     openAddRow, closeAddRow, saveAddRow,
   };
 })();

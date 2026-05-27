@@ -26,6 +26,8 @@ def init_db():
                 cron_expression            TEXT,
                 capture_instructions       TEXT,
                 ai_commentary_instructions TEXT,
+                number_min                 REAL,
+                number_max                 REAL,
                 sort_order                 INTEGER NOT NULL DEFAULT 0,
                 created_at                 TEXT NOT NULL,
                 updated_at                 TEXT NOT NULL,
@@ -33,15 +35,16 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS tracker_entries (
-                id          TEXT PRIMARY KEY,
-                tracker_id  TEXT NOT NULL REFERENCES trackers(id),
-                user_id     INTEGER NOT NULL,
-                entry_date  TEXT NOT NULL,
-                value_json  TEXT,
-                skipped     INTEGER NOT NULL DEFAULT 0,
-                source      TEXT NOT NULL DEFAULT 'manual',
-                created_at  TEXT NOT NULL,
-                updated_at  TEXT NOT NULL,
+                id             TEXT PRIMARY KEY,
+                tracker_id     TEXT NOT NULL REFERENCES trackers(id),
+                user_id        INTEGER NOT NULL,
+                entry_date     TEXT NOT NULL,
+                value_json     TEXT,
+                skipped        INTEGER NOT NULL DEFAULT 0,
+                source         TEXT NOT NULL DEFAULT 'manual',
+                ai_explanation TEXT,
+                created_at     TEXT NOT NULL,
+                updated_at     TEXT NOT NULL,
                 UNIQUE(tracker_id, entry_date)
             );
 
@@ -85,6 +88,8 @@ def create_tracker(
     cron_expression: str | None = None,
     capture_instructions: str | None = None,
     ai_commentary_instructions: str | None = None,
+    number_min: float | None = None,
+    number_max: float | None = None,
 ) -> str:
     if type not in ("yes_no", "number", "text"):
         raise TrackerError(f"invalid type: {type!r}")
@@ -101,11 +106,11 @@ def create_tracker(
             """INSERT INTO trackers
                (id, user_id, name, type, frequency, cron_expression,
                 capture_instructions, ai_commentary_instructions,
-                sort_order, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                number_min, number_max, sort_order, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (tid, user_id, name, type, frequency, cron_expression,
              capture_instructions, ai_commentary_instructions,
-             next_order, now, now),
+             number_min, number_max, next_order, now, now),
         )
     return tid
 
@@ -134,6 +139,7 @@ def update_tracker(user_id: int, tracker_id: str, **fields) -> None:
     allowed = {
         "name", "type", "frequency", "cron_expression",
         "capture_instructions", "ai_commentary_instructions",
+        "number_min", "number_max",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
@@ -222,6 +228,7 @@ def upsert_entry(
     *,
     source: str = "manual",
     skipped: bool = False,
+    ai_explanation: str | None = None,
 ) -> str:
     """Insert or update an entry. Returns the entry id."""
     now = _now()
@@ -229,17 +236,17 @@ def upsert_entry(
     if existing:
         with db.get_db() as conn:
             conn.execute(
-                "UPDATE tracker_entries SET value_json=?, source=?, skipped=?, updated_at=? WHERE id=?",
-                (value_json, source, int(skipped), now, existing["id"]),
+                "UPDATE tracker_entries SET value_json=?, source=?, skipped=?, ai_explanation=?, updated_at=? WHERE id=?",
+                (value_json, source, int(skipped), ai_explanation, now, existing["id"]),
             )
         return existing["id"]
     eid = uuid.uuid4().hex[:12]
     with db.get_db() as conn:
         conn.execute(
             """INSERT INTO tracker_entries
-               (id, tracker_id, user_id, entry_date, value_json, skipped, source, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (eid, tracker_id, user_id, entry_date, value_json, int(skipped), source, now, now),
+               (id, tracker_id, user_id, entry_date, value_json, skipped, source, ai_explanation, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (eid, tracker_id, user_id, entry_date, value_json, int(skipped), source, ai_explanation, now, now),
         )
     return eid
 
