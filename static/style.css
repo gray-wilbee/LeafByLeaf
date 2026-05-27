@@ -3761,6 +3761,7 @@ a.extraction-item-name:hover { color: var(--accent); }
 .td-textarea { font-family: var(--body); font-size: 14px; color: var(--color-ink); background: rgba(255,255,255,0.5); border: 1px solid rgba(63,91,70,0.25); border-radius: 6px; padding: 9px 12px; width: 100%; box-sizing: border-box; resize: vertical; }
 .td-textarea:focus { outline: none; border-color: var(--color-forest); }
 .modal-overlay { position: fixed; inset: 0; background: rgba(43,43,43,0.4); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 24px; }
+.modal-overlay[hidden] { display: none; }
 .modal-card { background: var(--color-paper); border-radius: 10px; padding: 28px 32px; width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 18px; }
 .modal-card--slim { max-width: 360px; }
 .modal-title { font-family: var(--serif); font-size: 22px; font-weight: 600; color: var(--color-forest); margin: 0; }
