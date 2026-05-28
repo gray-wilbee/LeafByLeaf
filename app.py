@@ -2351,12 +2351,122 @@ def api_trackers_capture():
         return jsonify({"error": "unauthorized"}), 401
     data = request.get_json(silent=True) or {}
     as_of_date = data.get("as_of_date") or datetime.now(user_tz()).strftime("%Y-%m-%d")
-    return jsonify(llm_service.run_tracker_cron(uid(), as_of_date))
+    eval_time = topics.get_setting(uid(), "tracker_eval_time", "00:00")
+    return jsonify(llm_service.run_tracker_cron(uid(), as_of_date, eval_time=eval_time))
+
+
+# ---------------------------------------------------------------------------
+# Tracker scheduler
+# ---------------------------------------------------------------------------
+
+_TRACKER_SCHEDULER_STARTED = False
+_TRACKER_SCHEDULER_LOCK = threading.Lock()
+
+
+def _parse_tracker_eval_time(value: str | None) -> tuple[int, int]:
+    try:
+        hour_s, minute_s = (value or "00:00").split(":", 1)
+        hour, minute = int(hour_s), int(minute_s)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    except Exception:
+        pass
+    return 0, 0
+
+
+def _tracker_batch_dates(now_utc: datetime, user_id: int) -> tuple[str, str, str, datetime] | None:
+    tz_name = topics.get_setting(user_id, "timezone", DEFAULT_TZ) or DEFAULT_TZ
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo(DEFAULT_TZ)
+    now_local = now_utc.astimezone(tz)
+    eval_time = topics.get_setting(user_id, "tracker_eval_time", "00:00") or "00:00"
+    hour, minute = _parse_tracker_eval_time(eval_time)
+    eval_today = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now_local < eval_today:
+        return None
+
+    capture_day = topics.get_setting(user_id, "tracker_capture_day", "previous") or "previous"
+    local_date = now_local.date()
+    if capture_day == "same":
+        entry_date = local_date
+        interval_end = eval_today
+    else:
+        entry_date = local_date - timedelta(days=1)
+        interval_end = eval_today
+        capture_day = "previous"
+
+    return local_date.isoformat(), entry_date.isoformat(), capture_day, interval_end
+
+
+def run_scheduled_tracker_batches(now_utc: datetime | None = None) -> list[dict]:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    results = []
+    if not _TRACKER_SCHEDULER_LOCK.acquire(blocking=False):
+        return results
+    try:
+        for user in users.list_all_users():
+            if user.get("disabled_at"):
+                continue
+            user_id = user["id"]
+            batch = _tracker_batch_dates(now_utc, user_id)
+            if not batch:
+                continue
+            local_run_date, entry_date, capture_day, interval_end = batch
+            eval_time = topics.get_setting(user_id, "tracker_eval_time", "00:00") or "00:00"
+            run_key = f"{local_run_date}|{entry_date}|{capture_day}|{eval_time}"
+            if topics.get_setting(user_id, "tracker_capture_last_run", "") == run_key:
+                continue
+
+            logger.info(
+                "Running tracker capture batch user_id=%s entry_date=%s interval_end=%s",
+                user_id,
+                entry_date,
+                interval_end.isoformat(),
+            )
+            result = llm_service.run_tracker_cron(
+                user_id,
+                entry_date,
+                interval_end=interval_end.isoformat(),
+                eval_time=eval_time,
+            )
+            topics.set_setting(user_id, "tracker_capture_last_run", run_key)
+            results.append({"user_id": user_id, "entry_date": entry_date, **result})
+    finally:
+        _TRACKER_SCHEDULER_LOCK.release()
+    return results
+
+
+def _tracker_scheduler_loop():
+    interval = int(os.environ.get("TRACKER_SCHEDULER_INTERVAL_SECONDS", "60"))
+    while True:
+        try:
+            run_scheduled_tracker_batches()
+        except Exception:
+            logger.exception("Scheduled tracker capture failed")
+        time.sleep(max(15, interval))
+
+
+def start_tracker_scheduler():
+    global _TRACKER_SCHEDULER_STARTED
+    if _TRACKER_SCHEDULER_STARTED:
+        return
+    if os.environ.get("TRACKER_SCHEDULER_DISABLED") == "1":
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "tracker-cron":
+        return
+    if "unittest" in sys.modules:
+        return
+    _TRACKER_SCHEDULER_STARTED = True
+    threading.Thread(target=_tracker_scheduler_loop, daemon=True, name="tracker-scheduler").start()
 
 
 # ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
+
+start_tracker_scheduler()
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "tracker-cron":
@@ -2364,7 +2474,8 @@ if __name__ == "__main__":
         for user in users.list_all_users():
             if user.get("disabled_at"):
                 continue
-            print(json.dumps({"user_id": user["id"], **llm_service.run_tracker_cron(user["id"], as_of_date)}))
+            eval_time = topics.get_setting(user["id"], "tracker_eval_time", "00:00")
+            print(json.dumps({"user_id": user["id"], **llm_service.run_tracker_cron(user["id"], as_of_date, eval_time=eval_time)}))
     else:
         threading.Thread(target=llm_service.backfill_tag_embeddings, daemon=True).start()
         app.run(host="0.0.0.0", port=8002, debug=os.environ.get("FLASK_DEBUG") == "1")

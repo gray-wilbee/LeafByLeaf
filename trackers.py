@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import db
 
 
@@ -415,8 +414,59 @@ def commentary_is_stale(tracker_id: str, user_id: int) -> bool:
 # Cron / scheduling helpers
 # ---------------------------------------------------------------------------
 
+def _cron_matches_date(cron_expression: str | None, date_str: str) -> bool:
+    """Return whether a tracker schedule fires on date_str.
+
+    Tracker capture runs at the user's configured evaluation time; the cron
+    expression controls which dates are due, not the wall-clock time of day.
+    """
+    cron_expr = cron_expression or "0 0 * * *"
+    ref = datetime.strptime(date_str, "%Y-%m-%d")
+    try:
+        from croniter import croniter  # type: ignore
+        next_fire = croniter(cron_expr, ref - timedelta(minutes=1)).get_next(datetime)
+        return next_fire.date() == ref.date()
+    except Exception:
+        return _basic_cron_matches_date(cron_expr, ref)
+
+
+def _basic_cron_matches_date(cron_expr: str, ref: datetime) -> bool:
+    """Best-effort matcher for simple 5-field cron expressions."""
+    parts = cron_expr.split()
+    if len(parts) != 5:
+        return True
+    _minute, _hour, day_of_month, month, day_of_week = parts
+    if month != "*" and str(ref.month) not in month.split(","):
+        return False
+    if day_of_month != "*" and str(ref.day) not in day_of_month.split(","):
+        return False
+    if day_of_week == "*":
+        return True
+    cron_dow = (ref.weekday() + 1) % 7  # cron: Sunday=0, Monday=1
+    allowed = set()
+    for item in day_of_week.split(","):
+        if "-" in item:
+            start, end = item.split("-", 1)
+            if start.isdigit() and end.isdigit():
+                allowed.update(range(int(start), int(end) + 1))
+        elif item.isdigit():
+            allowed.add(int(item))
+    return cron_dow in allowed or (cron_dow == 0 and 7 in allowed)
+
+
+def previous_scheduled_date(cron_expression: str | None, before_date: str) -> str:
+    """Return the scheduled date immediately before before_date."""
+    cron_expr = cron_expression or "0 0 * * *"
+    ref = datetime.strptime(before_date, "%Y-%m-%d")
+    try:
+        from croniter import croniter  # type: ignore
+        return croniter(cron_expr, ref).get_prev(datetime).strftime("%Y-%m-%d")
+    except Exception:
+        return (ref - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 def list_trackers_due(user_id: int, as_of_date: str) -> list[dict]:
-    """Return active trackers that don't have an entry for as_of_date yet."""
+    """Return active trackers scheduled for as_of_date without an entry yet."""
     with db.get_db() as conn:
         rows = conn.execute(
             """SELECT t.* FROM trackers t
@@ -428,11 +478,22 @@ def list_trackers_due(user_id: int, as_of_date: str) -> list[dict]:
                  )""",
             (user_id, as_of_date),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [t for t in (dict(r) for r in rows) if _cron_matches_date(t.get("cron_expression"), as_of_date)]
 
 
 def get_latest_entry_date(tracker_id: str, before_date: str | None = None) -> str | None:
     sql = "SELECT MAX(entry_date) AS d FROM tracker_entries WHERE tracker_id=? AND value_json IS NOT NULL"
+    args: list = [tracker_id]
+    if before_date:
+        sql += " AND entry_date < ?"
+        args.append(before_date)
+    with db.get_db() as conn:
+        r = conn.execute(sql, args).fetchone()
+    return r["d"] if r else None
+
+
+def get_latest_any_entry_date(tracker_id: str, before_date: str | None = None) -> str | None:
+    sql = "SELECT MAX(entry_date) AS d FROM tracker_entries WHERE tracker_id=?"
     args: list = [tracker_id]
     if before_date:
         sql += " AND entry_date < ?"

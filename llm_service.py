@@ -9,7 +9,8 @@ import difflib
 import time
 import re
 import requests as req_lib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as datetime_time
+from zoneinfo import ZoneInfo
 
 import utils
 import ai_models
@@ -1389,18 +1390,91 @@ def ai_translate_frequency(frequency_text: str, user_id: int) -> str:
     return "0 0 * * *"
 
 
-def _tracker_interval_context(user_id: int, interval_start: str, interval_end: str) -> str:
-    """Fetch journal entries and completed tasks in the given interval."""
-    entries = journal.search_entries(user_id, date_from=interval_start, date_to=interval_end, limit=60)
+DEFAULT_TZ = "America/Chicago"
+
+
+def _parse_tracker_time(value: str | None) -> datetime_time:
+    try:
+        hour, minute = (value or "00:00").split(":", 1)
+        return datetime_time(int(hour), int(minute))
+    except Exception:
+        return datetime_time(0, 0)
+
+
+def _parse_local_dt(value: str, tz: ZoneInfo) -> datetime:
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=tz)
+    return dt.astimezone(tz)
+
+
+def _tracker_entry_end(entry_date: str, eval_time: datetime_time, offset_days: int, tz: ZoneInfo) -> datetime:
+    date = datetime.strptime(entry_date, "%Y-%m-%d").date() + timedelta(days=offset_days)
+    return datetime.combine(date, eval_time, tzinfo=tz)
+
+
+def _tracker_interval_bounds(
+    user_id: int,
+    tracker: dict,
+    entry_date: str,
+    *,
+    interval_end: str | None = None,
+    eval_time: str | None = None,
+) -> tuple[datetime, datetime, str | None]:
+    tz = ZoneInfo(topics.get_setting(user_id, "timezone", DEFAULT_TZ) or DEFAULT_TZ)
+    eval_clock = _parse_tracker_time(eval_time or topics.get_setting(user_id, "tracker_eval_time", "00:00"))
+    if interval_end:
+        end = _parse_local_dt(interval_end, tz)
+    else:
+        end = _tracker_entry_end(entry_date, eval_clock, 1, tz)
+    target_date = datetime.strptime(entry_date, "%Y-%m-%d").date()
+    offset_days = (end.date() - target_date).days
+
+    latest_entry_date = trackers_db.get_latest_any_entry_date(tracker["id"], before_date=entry_date)
+    if latest_entry_date:
+        start = _tracker_entry_end(latest_entry_date, eval_clock, offset_days, tz)
+        return start, end, latest_entry_date
+
+    previous_date = trackers_db.previous_scheduled_date(tracker.get("cron_expression"), entry_date)
+    start = _tracker_entry_end(previous_date, eval_clock, offset_days, tz)
+    return start, end, None
+
+
+def _tracker_interval_context(user_id: int, interval_start: datetime, interval_end: datetime) -> str:
+    """Fetch journal entries and completed tasks in the given local interval."""
+    date_from = interval_start.strftime("%Y-%m-%d")
+    date_to = interval_end.strftime("%Y-%m-%d")
+    entries = journal.search_entries(user_id, date_from=date_from, date_to=date_to, limit=80)
     parts = []
     for entry in reversed(entries):
+        entry_dt = datetime.strptime(f"{entry['date']} {entry['time']}", "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=interval_start.tzinfo
+        )
+        if not (interval_start < entry_dt <= interval_end):
+            continue
         body = journal.get_entry(user_id, entry["date"], entry["time"])
         if body:
             parts.append(f"Journal entry {entry['date']} {entry['time']}:\n{body}")
-    completed = tasks_db.list_completed_in_range(user_id, interval_start, interval_end)
+    start_utc = interval_start.astimezone(ZoneInfo("UTC"))
+    end_utc = interval_end.astimezone(ZoneInfo("UTC"))
+    completed = tasks_db.list_completed_in_range(
+        user_id,
+        start_utc.strftime("%Y-%m-%d"),
+        end_utc.strftime("%Y-%m-%d"),
+    )
+    completed_lines = []
     if completed:
-        task_lines = "\n".join(f"- {t['title']}" for t in completed)
-        parts.append(f"Tasks completed in this period:\n{task_lines}")
+        for task in completed:
+            try:
+                completed_at = datetime.fromisoformat(task["completed_at"])
+                if completed_at.tzinfo is None:
+                    completed_at = completed_at.replace(tzinfo=ZoneInfo("UTC"))
+            except Exception:
+                completed_at = None
+            if completed_at is None or start_utc < completed_at.astimezone(ZoneInfo("UTC")) <= end_utc:
+                completed_lines.append(f"- {task['title']} ({task['completed_at']})")
+    if completed_lines:
+        parts.append("Tasks completed in this period:\n" + "\n".join(completed_lines))
     return "\n\n---\n\n".join(parts)
 
 
@@ -1422,7 +1496,84 @@ def _dummy_field(user_id: int, fields: list[dict], row: dict,
                  period_start: str, period_end: str) -> list[str]:
     # Kept as a stub so import references don't break; not used in new flow.
     return []
-def ai_capture_trackers(user_id: int, as_of_date: str) -> dict:
+def _tracker_value_schema(tracker: dict) -> dict:
+    value_type = tracker.get("type", "yes_no")
+    if value_type == "yes_no":
+        value_schema = {"type": "boolean"}
+    elif value_type == "number":
+        value_schema = {"type": "number"}
+        if tracker.get("number_min") is not None:
+            value_schema["minimum"] = tracker["number_min"]
+        if tracker.get("number_max") is not None:
+            value_schema["maximum"] = tracker["number_max"]
+    else:
+        value_schema = {"type": "string"}
+    return {
+        "type": "object",
+        "properties": {
+            "captured": {"type": "boolean"},
+            "value": value_schema,
+            "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+            "explanation": {"type": "string"},
+        },
+        "required": ["captured", "confidence", "explanation"],
+        "additionalProperties": False,
+    }
+
+
+def _normalize_tracker_value(tracker: dict, parsed: dict) -> tuple[bool, object | None]:
+    if not parsed.get("captured"):
+        return False, None
+    value = parsed.get("value")
+    tracker_type = tracker.get("type", "yes_no")
+    if tracker_type == "yes_no":
+        return (True, value) if isinstance(value, bool) else (False, None)
+    if tracker_type == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, None
+        min_v = tracker.get("number_min")
+        max_v = tracker.get("number_max")
+        if min_v is not None and value < min_v:
+            return False, None
+        if max_v is not None and value > max_v:
+            return False, None
+        return True, value
+    if isinstance(value, str) and value.strip():
+        return True, value.strip()
+    return False, None
+
+
+def _ai_structured_tracker_capture(user_id: int, tracker: dict, user_msg: str) -> dict:
+    preset = ai_models.get_func_preset("tracker_capture", user_id)
+    r = ai_models.structured_request(
+        gateway_url=GATEWAY_URL,
+        headers=_headers(
+            user_id,
+            anthropic_version=preset.provider == "anthropic",
+        ),
+        preset=preset,
+        system=(
+            "You are a personal tracker assistant. Extract structured values from "
+            "journal entries and task completion data. Return no value unless the "
+            "interval context contains enough evidence."
+        ),
+        user=user_msg,
+        schema=_tracker_value_schema(tracker),
+        schema_name="submit_tracker_capture",
+        max_tokens=500,
+        timeout=90,
+    )
+    r.raise_for_status()
+    return ai_models.structured_response(preset.provider, r.json())
+
+
+def ai_capture_trackers(
+    user_id: int,
+    as_of_date: str,
+    *,
+    interval_end: str | None = None,
+    eval_time: str | None = None,
+) -> dict:
     """AI capture: for each active tracker due on as_of_date, fetch interval context
     and extract the tracker value in one call per tracker."""
     from datetime import datetime, timedelta
@@ -1430,9 +1581,14 @@ def ai_capture_trackers(user_id: int, as_of_date: str) -> dict:
     results = []
     for tracker in trackers_due:
         try:
-            cron = tracker.get("cron_expression") or "0 0 * * *"
-            prev_date = _cron_previous_fire(cron, as_of_date)
-            context = _tracker_interval_context(user_id, prev_date, as_of_date)
+            interval_start_dt, interval_end_dt, latest_entry_date = _tracker_interval_bounds(
+                user_id,
+                tracker,
+                as_of_date,
+                interval_end=interval_end,
+                eval_time=eval_time,
+            )
+            context = _tracker_interval_context(user_id, interval_start_dt, interval_end_dt)
             tracker_type = tracker.get("type", "yes_no")
             instructions = tracker.get("capture_instructions") or ""
             if tracker_type == "yes_no":
@@ -1451,39 +1607,24 @@ def ai_capture_trackers(user_id: int, as_of_date: str) -> dict:
             user_msg = (
                 f"Tracker: {tracker['name']}\n"
                 f"Type: {tracker_type} — value must be {value_desc}\n"
-                f"Period: {prev_date} through {as_of_date}\n"
+                f"Entry date to save: {as_of_date}\n"
+                f"Interval start: {interval_start_dt.isoformat()}\n"
+                f"Interval end: {interval_end_dt.isoformat()}\n"
+                f"Previous tracker entry date: {latest_entry_date or '(none; using previous scheduled occurrence)'}\n"
                 + (f"Capture instructions: {instructions}\n" if instructions else "")
                 + f"\nContext from this period:\n{context[:7000]}\n\n"
-                "Based on the above context, extract the tracker value for this period. "
-                "It is perfectly fine to return null if the context does not contain enough information to justify a value — do not guess. "
+                "Based on the above interval context, extract the tracker value for this period. "
+                "Set captured=false if the context does not contain enough information to justify a value — do not guess. "
                 "When you do set a value, include 1–2 sentences explaining your reasoning, using direct quotes from the context to validate your choice. "
-                "Return JSON only (no markdown):\n"
-                '{"value": <extracted value or null if insufficient evidence>, '
-                '"confidence": "low|medium|high", '
-                '"explanation": "1-2 sentence explanation with direct quotes, or null if value is null"}'
+                "Return a structured JSON object with captured, value, confidence, and explanation."
             )
-            result_text = _ai_text_call(
-                system=(
-                    "You are a personal tracker assistant. Extract structured values from "
-                    "journal entries and task completion data. "
-                    "You MUST return null for value if there is not enough evidence in the context — passing is always the right choice over guessing."
-                ),
-                user=user_msg,
-                bucket="regular",
-                max_tokens=300,
-                user_id=user_id,
-                timeout=60,
-                func_key="tracker_capture",
-            )
-            if result_text.startswith("```"):
-                result_text = result_text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            parsed = json.loads(result_text)
-            value = parsed.get("value")
+            parsed = _ai_structured_tracker_capture(user_id, tracker, user_msg)
+            captured, value = _normalize_tracker_value(tracker, parsed)
             explanation = parsed.get("explanation") or None
-            if value is None:
+            if not captured:
                 # Create a pending entry (null value) for manual fill
                 trackers_db.upsert_entry(user_id, tracker["id"], as_of_date, None,
-                                         source="ai_captured")
+                                         source="ai_captured", ai_explanation=explanation)
                 results.append({"tracker_id": tracker["id"], "captured": False})
             else:
                 value_json = json.dumps(value)
@@ -1539,6 +1680,12 @@ def ai_tracker_commentary(user_id: int, tracker_id: str) -> str | None:
     return result.strip()
 
 
-def run_tracker_cron(user_id: int, as_of_date: str) -> dict:
+def run_tracker_cron(
+    user_id: int,
+    as_of_date: str,
+    *,
+    interval_end: str | None = None,
+    eval_time: str | None = None,
+) -> dict:
     """Cron entry point: AI-capture all due trackers for a user."""
-    return ai_capture_trackers(user_id, as_of_date)
+    return ai_capture_trackers(user_id, as_of_date, interval_end=interval_end, eval_time=eval_time)

@@ -266,6 +266,93 @@ def text_request(
     raise ValueError(f"Unsupported provider: {preset.provider}")
 
 
+def structured_request(
+    *,
+    gateway_url: str,
+    headers: dict[str, str],
+    preset: ModelPreset,
+    system: str,
+    user: str,
+    schema: dict[str, Any],
+    schema_name: str,
+    max_tokens: int,
+    timeout: int = 120,
+) -> req_lib.Response:
+    """Request a JSON object matching schema when the provider supports it."""
+    if preset.provider == "anthropic":
+        body: dict[str, Any] = {
+            "model": preset.model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+            "tools": [{
+                "name": schema_name,
+                "description": "Return the tracker capture result.",
+                "input_schema": schema,
+            }],
+            "tool_choice": {"type": "tool", "name": schema_name},
+        }
+        return req_lib.post(
+            f"{gateway_url}/proxy/anthropic/v1/messages",
+            json=body,
+            headers=headers,
+            timeout=timeout,
+        )
+
+    if preset.provider == "openai":
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user})
+        return req_lib.post(
+            f"{gateway_url}/proxy/openai/v1/chat/completions",
+            json={
+                "model": preset.model,
+                "messages": messages,
+                "max_completion_tokens": max_tokens,
+                "response_format": {"type": "json_object"},
+                "prompt_cache_key": _cache_key(preset, system),
+            },
+            headers={k: v for k, v in headers.items() if not k.lower().startswith("anthropic-")},
+            timeout=timeout,
+        )
+
+    if preset.provider == "gemini":
+        gemini_schema = copy.deepcopy(schema)
+        _strip_gemini_unsupported_schema_keys(gemini_schema)
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "responseMimeType": "application/json",
+                "responseSchema": gemini_schema,
+                "thinkingConfig": {"thinkingLevel": _gemini_text_thinking_level(preset, max_tokens)},
+            },
+        }
+        if system:
+            body["systemInstruction"] = {"parts": [{"text": system}]}
+        return req_lib.post(
+            f"{gateway_url}/proxy/gemini/v1beta/models/{preset.model}:generateContent",
+            json=body,
+            headers={k: v for k, v in headers.items() if not k.lower().startswith("anthropic-")},
+            timeout=timeout,
+        )
+
+    raise ValueError(f"Unsupported provider: {preset.provider}")
+
+
+def structured_response(provider: str, data: dict[str, Any]) -> dict[str, Any]:
+    if provider == "anthropic":
+        for block in data.get("content", []):
+            if block.get("type") == "tool_use":
+                return block.get("input") or {}
+        return {}
+    text = response_text(provider, data)
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    return json.loads(text or "{}")
+
+
 def claude_tool_schema(tool_def: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": tool_def["name"],
